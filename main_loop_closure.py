@@ -1,6 +1,6 @@
 """
 Contour Context Loop Closure Detection - Main Loop Closure Detection Pipeline
-主回环检测流程 - Python版本
+主回环检测流程 - Python版本 (修改版，支持PyCharm直接运行)
 """
 
 import numpy as np
@@ -154,6 +154,15 @@ class LoopClosureDetector:
 
         T_gt_curr = laser_info_tgt.sens_pose
 
+        # 显示轮廓统计
+        total_contours = sum(len(ptr_cm_tgt.get_lev_contours(i)) for i in range(len(self.cm_config.lv_grads)))
+        print(f"Generated {total_contours} total contours across all levels")
+        for level in range(min(3, len(self.cm_config.lv_grads))):  # 只显示前3层
+            contours = ptr_cm_tgt.get_lev_contours(level)
+            keys = ptr_cm_tgt.get_lev_retrieval_key(level)
+            valid_keys = sum(1 for key in keys if np.sum(key) != 0)
+            print(f"  Level {level}: {len(contours)} contours, {valid_keys}/{len(keys)} valid keys")
+
         print(f"Time makebev: {time.time() - start_time:.5f}")
 
         # 2.2 清理图像以节省内存
@@ -175,18 +184,19 @@ class LoopClosureDetector:
         else:
             pred_res = self.evaluator.add_prediction(
                 ptr_cm_tgt, cand_corr[0], ptr_cands[0], bev_tfs[0])
+            print(f"  Best candidate: ID {ptr_cands[0].get_int_id()}, correlation: {cand_corr[0]:.6f}")
 
         # 3.2 统计结果
         if pred_res.tfpn == PredictionOutcome.TP:
-            print("Prediction outcome: TP")
+            print("Prediction outcome: TP ✓")
             self.cnt_tp += 1
         elif pred_res.tfpn == PredictionOutcome.FP:
-            print("Prediction outcome: FP")
+            print("Prediction outcome: FP ✗")
             self.cnt_fp += 1
         elif pred_res.tfpn == PredictionOutcome.TN:
             print("Prediction outcome: TN")
         elif pred_res.tfpn == PredictionOutcome.FN:
-            print("Prediction outcome: FN")
+            print("Prediction outcome: FN ✗")
             self.cnt_fn += 1
 
         # 3.3 显示累计统计
@@ -209,6 +219,10 @@ class LoopClosureDetector:
         rebalance_time = time.time() - start_time
 
         print(f"Rebalance tree cost: {rebalance_time:.5f}")
+
+        # 显示数据库大小
+        total_db_size = len(self.contour_db.all_bevs)
+        print(f"Database size: {total_db_size} scans")
 
         return 0
 
@@ -308,24 +322,107 @@ class LoopClosureDetector:
         print("=" * 60)
 
 
+def create_config_file():
+    """创建配置文件"""
+    config = {
+        # 数据文件路径
+        'fpath_sens_gt_pose': "/home/wzj/pan1/contour_context_ws/src/contour-context/sample_data/ts-sens_pose-kitti00.txt",
+        'fpath_lidar_bins': "/home/wzj/pan1/contour_context_ws/src/contour-context/sample_data/ts-lidar_bins-kitti00.txt",
+        'fpath_outcome_sav': "/home/wzj/pan1/contour_context_py/outcome-kitti00.txt",
+
+        # 相关性阈值
+        'correlation_thres': 0.64928,
+
+        # 轮廓数据库配置
+        'ContourDBConfig': {
+            'nnk_': 50,
+            'max_fine_opt_': 10,
+            'q_levels_': [1, 2, 3],
+
+            # 树桶配置
+            'TreeBucketConfig': {
+                'max_elapse_': 25.0,
+                'min_elapse_': 15.0
+            },
+
+            # 轮廓相似性阈值配置
+            'ContourSimThresConfig': {
+                'ta_cell_cnt': 6.0,
+                'tp_cell_cnt': 0.2,
+                'tp_eigval': 0.2,
+                'ta_h_bar': 0.3,
+                'ta_rcom': 0.4,
+                'tp_rcom': 0.25
+            }
+        },
+
+        # 轮廓管理器配置
+        'ContourManagerConfig': {
+            'lv_grads_': [1.5, 2, 2.5, 3, 3.5, 4],
+            'reso_row_': 1.0,
+            'reso_col_': 1.0,
+            'n_row_': 150,
+            'n_col_': 150,
+            'lidar_height_': 2.0,
+            'blind_sq_': 9.0,
+            'min_cont_key_cnt_': 9,
+            'min_cont_cell_cnt_': 3,
+            'piv_firsts_': 6,
+            'dist_firsts_': 10,
+            'roi_radius_': 10.0
+        },
+
+        # 下界阈值
+        'thres_lb_': {
+            'i_ovlp_sum': 3,
+            'i_ovlp_max_one': 3,
+            'i_in_ang_rng': 3,
+            'i_indiv_sim': 3,
+            'i_orie_sim': 4,
+            'correlation': 0.3,
+            'area_perc': 0.03,
+            'neg_est_dist': -5.01
+        },
+
+        # 上界阈值
+        'thres_ub_': {
+            'i_ovlp_sum': 6,
+            'i_ovlp_max_one': 6,
+            'i_in_ang_rng': 6,
+            'i_indiv_sim': 6,
+            'i_orie_sim': 6,
+            'correlation': 0.75,
+            'area_perc': 0.15,
+            'neg_est_dist': -5.0
+        }
+    }
+
+    return config
+
+
 def main():
-    """主函数"""
-    import argparse
+    """主函数 - 修改为在PyCharm中直接运行"""
 
-    parser = argparse.ArgumentParser(description='Contour Context Loop Closure Detection')
-    parser.add_argument('--config', type=str, required=True,
-                        help='Path to configuration YAML file')
-    parser.add_argument('--output-dir', type=str, default='./results',
-                        help='Output directory for results')
+    # 硬编码配置，无需命令行参数
+    config_dict = create_config_file()
 
-    args = parser.parse_args()
+    # 创建临时配置文件
+    config_path = "temp_config.yaml"
+    output_dir = "./results"
 
     # 创建输出目录
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 保存配置文件
+    with open(config_path, 'w') as f:
+        yaml.dump(config_dict, f, default_flow_style=False)
+
+    print(f"Created configuration file: {config_path}")
+    print(f"Output directory: {output_dir}")
 
     try:
         # 初始化检测器
-        detector = LoopClosureDetector(args.config)
+        detector = LoopClosureDetector(config_path)
 
         # 运行完整流程
         results = detector.run_full_pipeline()
@@ -335,11 +432,15 @@ def main():
 
         # 保存结果到JSON文件
         import json
-        results_path = os.path.join(args.output_dir, 'loop_closure_results.json')
+        results_path = os.path.join(output_dir, 'loop_closure_results.json')
         with open(results_path, 'w') as f:
             json.dump(results, f, indent=2)
 
         print(f"\nResults saved to: {results_path}")
+
+        # 清理临时配置文件
+        if os.path.exists(config_path):
+            os.remove(config_path)
 
     except Exception as e:
         print(f"Error during execution: {e}")
