@@ -1,0 +1,68 @@
+# Contour Context Loop Closure Detection - Configuration Example
+# 轮廓上下文回环检测 - 配置示例
+
+# 数据文件路径
+fpath_sens_gt_pose: "/path/to/ts-sens_pose-kitti00.txt"
+fpath_lidar_bins: "/path/to/ts-lidar_bins-kitti00.txt"
+fpath_outcome_sav: "/path/to/results/outcome-kitti00.txt"
+
+# 相关性阈值
+correlation_thres: 0.64928
+
+# 轮廓数据库配置
+ContourDBConfig:
+  nnk_: 50                    # 最近邻数量
+  max_fine_opt_: 10           # 最大精细优化数量
+  q_levels_: [1, 2, 3]        # 查询层级
+
+  # 树桶配置
+  TreeBucketConfig:
+    max_elapse_: 25.0         # 添加到树之前的最大时间延迟
+    min_elapse_: 15.0         # 添加到树之前的最小等待时间
+
+  # 轮廓相似性阈值配置
+  ContourSimThresConfig:
+    ta_cell_cnt: 6.0          # 绝对细胞数阈值
+    tp_cell_cnt: 0.2          # 百分比细胞数阈值
+    tp_eigval: 0.2            # 特征值百分比阈值
+    ta_h_bar: 0.3             # 高度阈值 (KITTI用0.3, MulRan用0.75)
+    ta_rcom: 0.4              # 质心半径绝对阈值
+    tp_rcom: 0.25             # 质心半径百分比阈值
+
+# 轮廓管理器配置
+ContourManagerConfig:
+  lv_grads_: [1.5, 2, 2.5, 3, 3.5, 4]  # 层级梯度 (KITTI)
+  # lv_grads_: [1.0, 2.5, 4.0, 5.5, 7.0, 8.5]  # MulRan配置
+  reso_row_: 1.0              # 行分辨率
+  reso_col_: 1.0              # 列分辨率
+  n_row_: 150                 # 行数
+  n_col_: 150                 # 列数
+  lidar_height_: 2.0          # 激光雷达高度
+  blind_sq_: 9.0              # 盲区平方
+  min_cont_key_cnt_: 9        # 计算有效键的最小轮廓数
+  min_cont_cell_cnt_: 3       # 创建轮廓的最小细胞数
+  piv_firsts_: 6              # 作为锚点CA的前x个轮廓
+  dist_firsts_: 10            # 作为外围CA的前x个轮廓
+  roi_radius_: 10.0           # 锚点周围的ROI半径
+
+# 下界阈值
+thres_lb_:
+  i_ovlp_sum: 3               # 重叠总和
+  i_ovlp_max_one: 3           # 最大单个重叠
+  i_in_ang_rng: 3             # 角度范围内
+  i_indiv_sim: 3              # 个体相似性
+  i_orie_sim: 4               # 方向相似性
+  correlation: 0.3            # 相关性
+  area_perc: 0.03             # 面积百分比
+  neg_est_dist: -5.01         # 负估计距离
+
+# 上界阈值
+thres_ub_:
+  i_ovlp_sum: 6               # 重叠总和
+  i_ovlp_max_one: 6           # 最大单个重叠
+  i_in_ang_rng: 6             # 角度范围内
+  i_indiv_sim: 6              # 个体相似性
+  i_orie_sim: 6               # 方向相似性
+  correlation: 0.75           # 相关性
+  area_perc: 0.15             # 面积百分比
+  neg_est_dist: -5.0          # 负估计距离
