@@ -565,3 +565,275 @@ class CandidateManager:
         valid_candidates = []
 
         # 分析每个姿态的锚点对
+        for candidate in self.candidates:
+            assert len(candidate.anch_props) > 0
+
+            # 找到最佳的T_init（基于投票）
+            idx_sel = 0
+            for i in range(len(candidate.anch_props)):
+                # 计算使用区域百分比
+                lev_perc = [0] * len(self.cm_tgt.get_config().lv_grads)
+                for pr in candidate.anch_props[i].constell:
+                    lev_perc[pr.level] += pr.second
+
+                perc = 0
+                for j in range(NUM_BIN_KEY_LAYER):
+                    perc += LAYER_AREA_WEIGHTS[j] * lev_perc[DIST_BIN_LAYERS[j]]
+
+                candidate.anch_props[i].area_perc = perc
+
+                if candidate.anch_props[i].vote_cnt > candidate.anch_props[idx_sel].vote_cnt:
+                    idx_sel = i
+
+            # 将最佳提议放到第一位
+            if idx_sel != 0:
+                candidate.anch_props[0], candidate.anch_props[idx_sel] = \
+                    candidate.anch_props[idx_sel], candidate.anch_props[0]
+
+            # 总体测试1：面积百分比分数
+            print(f"Cand id:{candidate.cm_cand.get_int_id()}, @max# {candidate.anch_props[0].vote_cnt} votes, area perc: {candidate.anch_props[0].area_perc}")
+            if candidate.anch_props[0].area_perc < self.sim_var.sim_post.area_perc:
+                print(f"Low area skipped: {candidate.anch_props[0].area_perc:.6f} < {self.sim_var.sim_post.area_perc:.6f}")
+                cnt_to_rm += 1
+                continue
+
+            # 总体测试2：距离审查
+            neg_est_trans_norm2d = -ConstellCorrelation.get_est_sens_tf(candidate.anch_props[0].T_delta,
+                                                                       self.cm_tgt.get_config()).translation().norm()
+            if neg_est_trans_norm2d < self.sim_var.sim_post.neg_est_dist:
+                print(f"Low dist skipped: {neg_est_trans_norm2d:.6f} < {self.sim_var.sim_post.neg_est_dist:.6f}")
+                cnt_to_rm += 1
+                continue
+
+            # 总体测试3：相关性分数
+            corr_est = ConstellCorrelation(gmm_config)
+            corr_score_init = corr_est.init_problem(candidate.cm_cand, self.cm_tgt,
+                                                   candidate.anch_props[0].T_delta)
+
+            print(f"       :{candidate.cm_cand.get_int_id()}, init corr: {corr_score_init:.6f}")
+
+            if corr_score_init < self.sim_var.sim_post.correlation:
+                print(f"Low corr skipped: {corr_score_init:.6f} < {self.sim_var.sim_post.correlation:.6f}")
+                cnt_to_rm += 1
+                continue
+
+            # 通过测试，更新阈值变量
+            new_post_lb = ScorePostProc()
+            new_post_lb.correlation = corr_score_init
+            new_post_lb.area_perc = candidate.anch_props[0].area_perc
+            new_post_lb.neg_est_dist = neg_est_trans_norm2d
+            self._align_lb_post(new_post_lb)
+            self._align_ub_post()
+
+            candidate.anch_props[0].correlation = corr_score_init
+            candidate.corr_est = corr_est
+            valid_candidates.append(candidate)
+
+        # 更新候选列表
+        self.candidates = valid_candidates
+        print(f"Tidy up pose remaining: {len(self.candidates)}")
+
+    def _align_lb_post(self, bar: ScorePostProc):
+        """对齐后处理下界"""
+        self.sim_var.sim_post.correlation = max(self.sim_var.sim_post.correlation, bar.correlation)
+        self.sim_var.sim_post.area_perc = max(self.sim_var.sim_post.area_perc, bar.area_perc)
+        self.sim_var.sim_post.neg_est_dist = max(self.sim_var.sim_post.neg_est_dist, bar.neg_est_dist)
+
+    def _align_ub_post(self):
+        """对齐后处理上界"""
+        self.sim_var.sim_post.correlation = min(self.sim_var.sim_post.correlation, self.sim_ub.sim_post.correlation)
+        self.sim_var.sim_post.area_perc = min(self.sim_var.sim_post.area_perc, self.sim_ub.sim_post.area_perc)
+        self.sim_var.sim_post.neg_est_dist = min(self.sim_var.sim_post.neg_est_dist, self.sim_ub.sim_post.neg_est_dist)
+
+    def fine_optimize(self, max_fine_opt: int) -> Tuple[List[ContourManager], List[float], List[np.ndarray]]:
+        """精细优化 - 选择有希望的姿态候选并优化精确姿态估计"""
+        assert self.flow_valve < 2
+        self.flow_valve += 1
+
+        res_cand = []
+        res_corr = []
+        res_T = []
+
+        if not self.candidates:
+            return res_cand, res_corr, res_T
+
+        # 按相关性排序
+        self.candidates.sort(key=lambda d: d.anch_props[0].correlation, reverse=True)
+
+        pre_sel_size = min(max_fine_opt, len(self.candidates))
+        for i in range(pre_sel_size):
+            correlation, T_best = self.candidates[i].corr_est.calc_correlation()
+            self.candidates[i].anch_props[0].correlation = correlation
+            self.candidates[i].anch_props[0].T_delta = T_best
+
+        # 再次排序
+        self.candidates[:pre_sel_size] = sorted(
+            self.candidates[:pre_sel_size],
+            key=lambda d: d.anch_props[0].correlation,
+            reverse=True
+        )
+
+        print("Fine optim corrs:")
+        ret_size = 1  # 返回前1个
+        for i in range(ret_size):
+            res_cand.append(self.candidates[i].cm_cand)
+            res_corr.append(self.candidates[i].anch_props[0].correlation)
+            res_T.append(self.candidates[i].anch_props[0].T_delta)
+            print(f"correlation: {self.candidates[i].anch_props[0].correlation:.6f}")
+
+        return res_cand, res_corr, res_T
+
+
+class ContourDB:
+    """轮廓数据库 - 管理整个轮廓数据库以进行位置重识别"""
+
+    def __init__(self, config: ContourDBConfig):
+        """
+        初始化轮廓数据库
+
+        Args:
+            config: 数据库配置
+        """
+        self.cfg = config
+        self.layer_db: List[LayerDB] = []
+        self.all_bevs: List[ContourManager] = []
+
+        # 为每个查询层级创建层数据库
+        for level in config.q_levels:
+            self.layer_db.append(LayerDB(config.tb_cfg))
+
+        assert len(config.q_levels) > 0
+
+    def query_ranged_knn(self, q_ptr: ContourManager,
+                        thres_lb: CandidateScoreEnsemble,
+                        thres_ub: CandidateScoreEnsemble) -> Tuple[List[ContourManager], List[float], List[np.ndarray]]:
+        """
+        范围KNN查询
+
+        Args:
+            q_ptr: 查询轮廓管理器
+            thres_lb: 下界阈值
+            thres_ub: 上界阈值
+
+        Returns:
+            (候选轮廓管理器列表, 相关性分数列表, 变换矩阵列表)
+        """
+        cand_ptrs = []
+        cand_corr = []
+        cand_tf = []
+
+        t1 = t2 = t3 = t4 = t5 = 0.0
+        start_time = time.time()
+
+        cand_mng = CandidateManager(q_ptr, thres_lb, thres_ub)
+
+        # 为每个层级进行搜索
+        for ll in range(len(self.cfg.q_levels)):
+            q_bcis = q_ptr.get_lev_bci(self.cfg.q_levels[ll])
+            q_keys = q_ptr.get_lev_retrieval_key(self.cfg.q_levels[ll])
+
+            assert len(q_bcis) == len(q_keys)
+
+            for seq in range(len(q_bcis)):
+                if np.sum(q_keys[seq]) != 0:
+                    # 1. 查询
+                    start_time = time.time()
+                    tmp_res = []
+
+                    # 计算最大查询距离
+                    key_bounds = np.zeros((3, 2))
+                    key_bounds[0, 0] = q_keys[seq][0] * 0.8
+                    key_bounds[0, 1] = q_keys[seq][0] / 0.8
+                    key_bounds[1, 0] = q_keys[seq][1] * 0.8
+                    key_bounds[1, 1] = q_keys[seq][1] / 0.8
+                    key_bounds[2, 0] = q_keys[seq][2] * 0.8 * 0.75
+                    key_bounds[2, 1] = q_keys[seq][2] / (0.8 * 0.75)
+
+                    dist_ub = max(
+                        max((q_keys[seq][0] - key_bounds[0, 0]) ** 2,
+                            (q_keys[seq][0] - key_bounds[0, 1]) ** 2),
+                        max((q_keys[seq][1] - key_bounds[1, 0]) ** 2,
+                            (q_keys[seq][1] - key_bounds[1, 1]) ** 2),
+                        max((q_keys[seq][2] - key_bounds[2, 0]) ** 2,
+                            (q_keys[seq][2] - key_bounds[2, 1]) ** 2)
+                    )
+
+                    tmp_res = self.layer_db[ll].layer_knn_search(q_keys[seq], self.cfg.nnk, dist_ub)
+                    t1 += time.time() - start_time
+
+                    print(f"Dist ub: {dist_ub:.6f}")
+                    print(f"L:{self.cfg.q_levels[ll]} S:{seq}. Found in range: {len(tmp_res)}")
+
+                    # 2. 检查
+                    start_time = time.time()
+                    for sear_res in tmp_res:
+                        cnt_chk_pass = cand_mng.check_cand_with_hint(
+                            self.all_bevs[sear_res[0].gidx],
+                            ConstellationPair(self.cfg.q_levels[ll], sear_res[0].seq, seq),
+                            self.cfg.cont_sim_cfg)
+                    t2 += time.time() - start_time
+
+        # 找到最佳候选并进行精细调整
+        start_time = time.time()
+        cand_mng.tidy_up_candidates()
+        res_cand_ptr, res_corr, res_T = cand_mng.fine_optimize(self.cfg.max_fine_opt)
+        t5 += time.time() - start_time
+
+        num_best_cands = len(res_cand_ptr)
+        if num_best_cands:
+            print(f"After check 1: {cand_mng.cand_aft_check1}")
+            print(f"After check 2: {cand_mng.cand_aft_check2}")
+            print(f"After check 3: {cand_mng.cand_aft_check3}")
+        else:
+            print("No candidates are valid after checks.")
+
+        for i in range(num_best_cands):
+            cand_ptrs.append(res_cand_ptr[i])
+            cand_corr.append(res_corr[i])
+            cand_tf.append(res_T[i])
+
+        print(f"T knn search : {t1:.5f}")
+        print(f"T running chk: {t2:.5f}")
+        print(f"T fine optim : {t5:.5f}")
+
+        return cand_ptrs, cand_corr, cand_tf
+
+    def add_scan(self, added: ContourManager, curr_timestamp: float):
+        """
+        添加扫描到数据库
+
+        Args:
+            added: 要添加的轮廓管理器
+            curr_timestamp: 当前时间戳
+        """
+        for ll in range(len(self.cfg.q_levels)):
+            seq = 0
+            for permu_key in added.get_lev_retrieval_key(self.cfg.q_levels[ll]):
+                if np.sum(permu_key) != 0:
+                    self.layer_db[ll].push_buffer(permu_key, curr_timestamp,
+                                                IndexOfKey(len(self.all_bevs), self.cfg.q_levels[ll], seq))
+                seq += 1
+
+        self.all_bevs.append(added)
+
+    def push_and_balance(self, seed: int, curr_timestamp: float):
+        """
+        推送数据并维持平衡
+
+        Args:
+            seed: 种子值
+            curr_timestamp: 当前时间戳
+        """
+        idx_t1 = abs(seed) % (2 * (LayerDB.MAX_NUM_BUCKETS - 2))
+        if idx_t1 > (LayerDB.MAX_NUM_BUCKETS - 2):
+            idx_t1 = 2 * (LayerDB.MAX_NUM_BUCKETS - 2) - idx_t1
+
+        print(f"Balancing bucket {idx_t1} and {idx_t1 + 1}")
+
+        print("Tree size of each bucket:")
+        for ll in range(len(self.cfg.q_levels)):
+            print(f"q_levels_[{ll}]: ", end="")
+            self.layer_db[ll].rebuild(idx_t1, curr_timestamp)
+            for i in range(LayerDB.MAX_NUM_BUCKETS):
+                print(f"{self.layer_db[ll].buckets[i].get_tree_size():5d}", end="")
+            print()
