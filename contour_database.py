@@ -573,8 +573,8 @@ class CandidateManager:
             for i in range(len(candidate.anch_props)):
                 # 计算使用区域百分比
                 lev_perc = [0] * len(self.cm_tgt.get_config().lv_grads)
-                for pr in candidate.anch_props[i].constell:
-                    lev_perc[pr.level] += pr.second
+                for pr, area_perc in candidate.anch_props[i].constell.items():
+                    lev_perc[pr.level] += area_perc
 
                 perc = 0
                 for j in range(NUM_BIN_KEY_LAYER):
@@ -598,8 +598,10 @@ class CandidateManager:
                 continue
 
             # 总体测试2：距离审查
-            neg_est_trans_norm2d = -ConstellCorrelation.get_est_sens_tf(candidate.anch_props[0].T_delta,
-                                                                       self.cm_tgt.get_config()).translation().norm()
+            # 正确的代码
+            est_sens_tf = ConstellCorrelation.get_est_sens_tf(candidate.anch_props[0].T_delta,
+                                                              self.cm_tgt.get_config())
+            neg_est_trans_norm2d = -np.linalg.norm(est_sens_tf[:2, 2])
             if neg_est_trans_norm2d < self.sim_var.sim_post.neg_est_dist:
                 print(f"Low dist skipped: {neg_est_trans_norm2d:.6f} < {self.sim_var.sim_post.neg_est_dist:.6f}")
                 cnt_to_rm += 1
