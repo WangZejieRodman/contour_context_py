@@ -124,6 +124,15 @@ class LoopClosureDetector:
 
         self.outcome_save_path = fpath_outcome_sav
 
+        # ===== 添加调试输出 =====
+        print(f"[DEBUG] Loaded thresholds:")
+        print(
+            f"  Lower bounds - Constell: {self.thres_lb.sim_constell.i_in_ang_rng}, Pair: {self.thres_lb.sim_pair.i_orie_sim}")
+        print(
+            f"  Upper bounds - Constell: {self.thres_ub.sim_constell.i_in_ang_rng}, Pair: {self.thres_ub.sim_pair.i_orie_sim}")
+        print(f"  Correlation threshold: {corr_thres}")
+        # ===== 调试输出结束 =====
+
     def process_single_scan(self, outer_cnt: int) -> int:
         """
         处理单个扫描
