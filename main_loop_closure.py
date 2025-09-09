@@ -242,9 +242,8 @@ class LoopClosureDetector:
             ret_code = self.process_single_scan(cnt)
 
             if ret_code == 1:
-                print("Scan processing failed, retrying...")
-                time.sleep(1.0)
-                continue
+                print("No more scans to process. Pipeline completed!")
+                break  # 改为正常退出而不是重试
             elif ret_code == -1:
                 print("Pipeline completed!")
                 break
