@@ -330,7 +330,7 @@ def create_config_file():
         'fpath_outcome_sav': "/home/wzj/pan1/contour_context_py/outcome-kitti00.txt",
 
         # 相关性阈值
-        'correlation_thres': 0.20,
+        'correlation_thres': 0.64928,
 
         # 轮廓数据库配置
         'ContourDBConfig': {
@@ -373,26 +373,26 @@ def create_config_file():
 
         # 下界阈值 - 修正距离下界
         'thres_lb_': {
-            'i_ovlp_sum': 2,
-            'i_ovlp_max_one': 2,
-            'i_in_ang_rng': 2,
-            'i_indiv_sim': 2,
-            'i_orie_sim': 3,
-            'correlation': 0.05,       # 从0.15降到0.05
-            'area_perc': 0.005,        # 从0.01降到0.005
-            'neg_est_dist': -500.0     # 从-300.0降到-500.0
+            'i_ovlp_sum': 3,
+            'i_ovlp_max_one': 3,
+            'i_in_ang_rng': 3,
+            'i_indiv_sim': 3,
+            'i_orie_sim': 4,
+            'correlation': 0.3,        # 恢复原值
+            'area_perc': 0.03,         # 恢复原值
+            'neg_est_dist': -5.01      # 恢复原值
         },
 
         # 上界阈值 - 需要更大的余量
         'thres_ub_': {
-            'i_ovlp_sum': 20,  # 从12增加到20
-            'i_ovlp_max_one': 20,  # 从12增加到20
-            'i_in_ang_rng': 20,  # 从12增加到20
-            'i_indiv_sim': 20,  # 从12增加到20
-            'i_orie_sim': 20,  # 从12增加到20
-            'correlation': 0.85,
-            'area_perc': 0.25,
-            'neg_est_dist': -200.0  # 大幅放宽距离限制
+            'i_ovlp_sum': 6,
+            'i_ovlp_max_one': 6,
+            'i_in_ang_rng': 6,
+            'i_indiv_sim': 6,
+            'i_orie_sim': 6,
+            'correlation': 0.75,
+            'area_perc': 0.15,
+            'neg_est_dist': -5.0
         }
     }
 
