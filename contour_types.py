@@ -197,6 +197,11 @@ class BCI:
         """
         assert src.level == tgt.level, "BCI层级必须相同"
 
+        # ===== 添加调试输出 =====
+        print(
+            f"[DEBUG] BCI constellation check - src has {len(src.nei_pts)} neighbors, tgt has {len(tgt.nei_pts)} neighbors")
+        # ===== 调试输出结束 =====
+
         from contour_types import ScoreConstellSim, ConstellationPair, DistSimPair
 
         # 1. 计算位重叠
@@ -218,6 +223,10 @@ class BCI:
         ret = ScoreConstellSim()
         ret.i_ovlp_sum = ovlp_sum
         ret.i_ovlp_max_one = max_one
+
+        # ===== 添加调试输出 =====
+        print(f"[DEBUG] Bit overlap - sum: {ovlp_sum}, max: {max_one}, required: {lb.i_ovlp_sum}/{lb.i_ovlp_max_one}")
+        # ===== 调试输出结束 =====
 
         # 如果重叠不足，直接返回
         if ovlp_sum < lb.i_ovlp_sum or max_one < lb.i_ovlp_max_one:
