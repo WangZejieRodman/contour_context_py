@@ -173,18 +173,20 @@ class LayerDB:
         self.buckets: List[TreeBucket] = []
         self.bucket_ranges: List[float] = []
 
-        # 初始化桶范围
+        # 初始化桶范围 - 修复：正确设置初始范围
         self.bucket_ranges = [0.0] * (self.MAX_NUM_BUCKETS + 1)
         self.bucket_ranges[0] = -self.MAX_BUCKET_VAL
         self.bucket_ranges[-1] = self.MAX_BUCKET_VAL
 
-        # 创建第一个桶（覆盖整个范围）
-        self.buckets.append(TreeBucket(tb_cfg, -self.MAX_BUCKET_VAL, self.MAX_BUCKET_VAL))
-
-        # 创建其他空桶
-        for i in range(1, self.MAX_NUM_BUCKETS):
-            self.bucket_ranges[i] = self.MAX_BUCKET_VAL
-            self.buckets.append(TreeBucket(tb_cfg, self.MAX_BUCKET_VAL, self.MAX_BUCKET_VAL))
+        # 初始时所有桶都覆盖整个范围，后续会动态调整
+        for i in range(self.MAX_NUM_BUCKETS):
+            if i == 0:
+                # 第一个桶覆盖整个范围
+                self.buckets.append(TreeBucket(tb_cfg, -self.MAX_BUCKET_VAL, self.MAX_BUCKET_VAL))
+            else:
+                # 其他桶初始为空（范围为最大值，表示无效）
+                self.bucket_ranges[i] = self.MAX_BUCKET_VAL
+                self.buckets.append(TreeBucket(tb_cfg, self.MAX_BUCKET_VAL, self.MAX_BUCKET_VAL))
 
     def push_buffer(self, layer_key: np.ndarray, ts: float, scan_key_gidx: IndexOfKey):
         """推送到合适的桶缓冲区"""
@@ -214,22 +216,207 @@ class LayerDB:
         # 获取树大小
         sz1 = tr1.get_tree_size()
         sz2 = tr2.get_tree_size()
-        diff_ratio = abs(sz1 - sz2) / max(sz1, sz2) if max(sz1, sz2) > 0 else 0
 
-        # 决定是否需要平衡
-        if pb1 and not pb2 and (diff_ratio < self.IMBA_DIFF_RATIO or max(sz1, sz2) < self.MIN_ELEM_SPLIT):
+        # 计算大小差异比例
+        max_size = max(sz1, sz2)
+        if max_size == 0:
+            diff_ratio = 0
+        else:
+            diff_ratio = abs(sz1 - sz2) / max_size
+
+        # 简单情况：只需要弹出缓冲区，不需要平衡
+        if pb1 and not pb2 and (diff_ratio < self.IMBA_DIFF_RATIO or max_size < self.MIN_ELEM_SPLIT):
             tr1.pop_buffer_max(curr_ts)
             return
 
-        if not pb1 and pb2 and (diff_ratio < self.IMBA_DIFF_RATIO or max(sz1, sz2) < self.MIN_ELEM_SPLIT):
+        if not pb1 and pb2 and (diff_ratio < self.IMBA_DIFF_RATIO or max_size < self.MIN_ELEM_SPLIT):
             tr2.pop_buffer_max(curr_ts)
             return
 
-        # 简化的平衡策略：直接弹出缓冲区
-        if pb1:
-            tr1.pop_buffer_max(curr_ts)
-        if pb2:
-            tr2.pop_buffer_max(curr_ts)
+        # 需要平衡的情况
+        if diff_ratio >= self.IMBA_DIFF_RATIO and max_size >= self.MIN_ELEM_SPLIT:
+            print(" (rebalancing...)")
+            success = self._rebalance_buckets(tr1, tr2, idx_t1, curr_ts, sz1, sz2)
+            if not success:
+                # 平衡失败，只弹出缓冲区
+                if pb1:
+                    tr1.pop_buffer_max(curr_ts)
+                if pb2:
+                    tr2.pop_buffer_max(curr_ts)
+        else:
+            # 不需要平衡，只弹出缓冲区
+            if pb1:
+                tr1.pop_buffer_max(curr_ts)
+            if pb2:
+                tr2.pop_buffer_max(curr_ts)
+
+    def _rebalance_buckets(self, tr1: TreeBucket, tr2: TreeBucket, idx_t1: int,
+                           curr_ts: float, sz1: int, sz2: int) -> bool:
+        """重新平衡两个桶"""
+        try:
+            if sz1 > sz2:
+                return self._move_data_from_bucket1_to_bucket2(tr1, tr2, idx_t1, curr_ts, sz1, sz2)
+            else:
+                return self._move_data_from_bucket2_to_bucket1(tr1, tr2, idx_t1, curr_ts, sz1, sz2)
+        except Exception as e:
+            print(f"Rebalancing failed: {e}")
+            return False
+
+    def _move_data_from_bucket1_to_bucket2(self, tr1: TreeBucket, tr2: TreeBucket,
+                                           idx_t1: int, curr_ts: float, sz1: int, sz2: int) -> bool:
+        """从桶1移动数据到桶2"""
+        if sz1 == 0:
+            return False
+
+        # 计算要移动的数据量
+        to_move = (sz1 - sz2) // 2
+        to_move = max(1, min(to_move, sz1 - 1))  # 至少移动1个，最多保留1个
+
+        # 获取所有数据并按桶通道值排序
+        all_data = []
+        all_indices = []
+
+        for i, key in enumerate(tr1.data_tree):
+            all_data.append((key[self.BUCKET_CHANN], key, tr1.gkidx_tree[i]))
+
+        # 按桶通道值排序
+        all_data.sort(key=lambda x: x[0])
+
+        if len(all_data) < to_move:
+            return False
+
+        # 找到分割点
+        split_idx = len(all_data) - to_move
+        split_val = all_data[split_idx][0]
+
+        # 移动数据到桶2
+        moved_keys = []
+        moved_indices = []
+        remaining_keys = []
+        remaining_indices = []
+
+        for val, key, idx in all_data:
+            if val >= split_val and len(moved_keys) < to_move:
+                moved_keys.append(key)
+                moved_indices.append(idx)
+            else:
+                remaining_keys.append(key)
+                remaining_indices.append(idx)
+
+        # 更新桶1
+        tr1.data_tree = remaining_keys
+        tr1.gkidx_tree = remaining_indices
+
+        # 更新桶2
+        tr2.data_tree.extend(moved_keys)
+        tr2.gkidx_tree.extend(moved_indices)
+
+        # 更新桶范围
+        old_range = tr1.buc_end
+        tr1.buc_end = tr2.buc_beg = split_val
+        self.bucket_ranges[idx_t1 + 1] = split_val
+
+        # 处理缓冲区
+        self._redistribute_buffer_data(tr1, tr2, split_val)
+
+        # 重建树
+        tr1.pop_buffer_max(curr_ts)
+        tr2.pop_buffer_max(curr_ts)
+
+        return True
+
+    def _move_data_from_bucket2_to_bucket1(self, tr1: TreeBucket, tr2: TreeBucket,
+                                           idx_t1: int, curr_ts: float, sz1: int, sz2: int) -> bool:
+        """从桶2移动数据到桶1"""
+        if sz2 == 0:
+            return False
+
+        # 计算要移动的数据量
+        to_move = (sz2 - sz1) // 2
+        to_move = max(1, min(to_move, sz2 - 1))
+
+        # 获取桶2的所有数据并排序
+        all_data = []
+        for i, key in enumerate(tr2.data_tree):
+            all_data.append((key[self.BUCKET_CHANN], key, tr2.gkidx_tree[i]))
+
+        all_data.sort(key=lambda x: x[0])
+
+        if len(all_data) < to_move:
+            return False
+
+        # 找到分割点（移动最小的数据到桶1）
+        split_val = all_data[to_move - 1][0]
+
+        # 移动数据到桶1
+        moved_keys = []
+        moved_indices = []
+        remaining_keys = []
+        remaining_indices = []
+
+        for val, key, idx in all_data:
+            if val <= split_val and len(moved_keys) < to_move:
+                moved_keys.append(key)
+                moved_indices.append(idx)
+            else:
+                remaining_keys.append(key)
+                remaining_indices.append(idx)
+
+        # 更新桶1
+        tr1.data_tree.extend(moved_keys)
+        tr1.gkidx_tree.extend(moved_indices)
+
+        # 更新桶2
+        tr2.data_tree = remaining_keys
+        tr2.gkidx_tree = remaining_indices
+
+        # 更新桶范围
+        if remaining_keys:
+            new_split = min(key[self.BUCKET_CHANN] for key in remaining_keys)
+        else:
+            new_split = split_val + 0.1
+
+        tr1.buc_end = tr2.buc_beg = new_split
+        self.bucket_ranges[idx_t1 + 1] = new_split
+
+        # 处理缓冲区
+        self._redistribute_buffer_data(tr1, tr2, new_split)
+
+        # 重建树
+        tr1.pop_buffer_max(curr_ts)
+        tr2.pop_buffer_max(curr_ts)
+
+        return True
+
+    def _redistribute_buffer_data(self, tr1: TreeBucket, tr2: TreeBucket, split_val: float):
+        """重新分配缓冲区数据"""
+        # 重新分配tr1的缓冲区
+        tr1_new_buffer = []
+        tr2_additional_buffer = []
+
+        for key, ts, idx in tr1.buffer:
+            if key[self.BUCKET_CHANN] < split_val:
+                tr1_new_buffer.append((key, ts, idx))
+            else:
+                tr2_additional_buffer.append((key, ts, idx))
+
+        # 重新分配tr2的缓冲区
+        tr2_new_buffer = []
+        tr1_additional_buffer = []
+
+        for key, ts, idx in tr2.buffer:
+            if key[self.BUCKET_CHANN] >= split_val:
+                tr2_new_buffer.append((key, ts, idx))
+            else:
+                tr1_additional_buffer.append((key, ts, idx))
+
+        # 更新缓冲区
+        tr1.buffer = tr1_new_buffer + tr1_additional_buffer
+        tr2.buffer = tr2_new_buffer + tr2_additional_buffer
+
+        # 按时间戳排序
+        tr1.buffer.sort(key=lambda x: x[1])
+        tr2.buffer.sort(key=lambda x: x[1])
 
     def layer_knn_search(self, q_key: np.ndarray, k_top: int, max_dist_sq: float) -> List[Tuple[IndexOfKey, float]]:
         """层KNN搜索"""
@@ -264,7 +451,7 @@ class LayerDB:
                     continue
                 bucket_idx = mid_bucket + i
 
-            if bucket_idx >= 0:
+            if bucket_idx >= 0 and bucket_idx < len(self.buckets):
                 tmp_gidx, tmp_dists_sq = self.buckets[bucket_idx].knn_search(k_top, q_key, max_dist_sq_run)
 
                 for gidx, dist_sq in zip(tmp_gidx, tmp_dists_sq):
@@ -275,7 +462,8 @@ class LayerDB:
                 res_pairs.sort(key=lambda x: x[1])
                 if len(res_pairs) >= k_top:
                     res_pairs = res_pairs[:k_top]
-                    max_dist_sq_run = res_pairs[-1][1]
+                    if res_pairs:
+                        max_dist_sq_run = res_pairs[-1][1]
 
         return res_pairs
 
