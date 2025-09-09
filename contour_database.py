@@ -585,7 +585,7 @@ class CandidateManager:
         self.cand_aft_check3 = 0  # 第三轮检查后的候选数
 
         # 动态阈值控制开关（对应C++的DYNAMIC_THRES宏）
-        self.enable_dynamic_thres = True
+        self.enable_dynamic_thres = False
 
         # 阈值调整限制参数
         self.max_thres_increase_rate = 2.0  # 最大增长倍数
@@ -617,8 +617,18 @@ class CandidateManager:
         cand_id = cm_cand.get_int_id()
         ret_score = CandidateScoreEnsemble()
 
+        # ===== 添加调试输出 =====
+        print(
+            f"[DEBUG] Checking candidate {cand_id}, anchor_pair: L{anchor_pair.level} S{anchor_pair.seq_src}->{anchor_pair.seq_tgt}")
+        # ===== 调试输出结束 =====
+
         # 检查1/4: 锚点相似性
         anchor_sim = self._check_cont_pair_sim(cm_cand, self.cm_tgt, anchor_pair, cont_sim)
+
+        # ===== 添加调试输出 =====
+        print(f"[DEBUG] Anchor similarity check: {anchor_sim}")
+        # ===== 调试输出结束 =====
+
         if not anchor_sim:
             return ret_score
 
@@ -635,6 +645,12 @@ class CandidateManager:
             self.cm_tgt.get_bci(anchor_pair.level, anchor_pair.seq_tgt),
             self.sim_var.sim_constell, tmp_pairs1)
 
+        # ===== 添加调试输出 =====
+        print(
+            f"[DEBUG] Constellation check - Required: {self.sim_var.sim_constell.i_in_ang_rng}, Got: {ret_constell_sim.i_in_ang_rng}")
+        print(f"[DEBUG] Constellation pairs found: {len(tmp_pairs1)}")
+        # ===== 调试输出结束 =====
+
         ret_score.sim_constell = ret_constell_sim
         if ret_constell_sim.overall() < self.sim_var.sim_constell.overall():
             return ret_score
@@ -646,6 +662,13 @@ class CandidateManager:
         tmp_area_perc = []
         ret_pairwise_sim, tmp_pairs2, tmp_area_perc = self._check_constell_corresp_sim(
             cm_cand, self.cm_tgt, tmp_pairs1, self.sim_var.sim_pair, cont_sim)
+
+        # ===== 添加调试输出 =====
+        print(
+            f"[DEBUG] Pairwise check - Required: {self.sim_var.sim_pair.i_orie_sim}, Got: {ret_pairwise_sim.i_orie_sim}")
+        print(f"[DEBUG] Individual sim: {ret_pairwise_sim.i_indiv_sim}, Orientation sim: {ret_pairwise_sim.i_orie_sim}")
+        print(f"[DEBUG] Final pairs: {len(tmp_pairs2)}")
+        # ===== 调试输出结束 =====
 
         ret_score.sim_pair = ret_pairwise_sim
         if ret_pairwise_sim.overall() < self.sim_var.sim_pair.overall():
