@@ -115,6 +115,11 @@ class ContourView:
         # 1. 面积检查
         if (diff_perc(cont_src.cell_cnt, cont_tgt.cell_cnt, simthres.tp_cell_cnt) or
                 diff_delt(cont_src.cell_cnt, cont_tgt.cell_cnt, simthres.ta_cell_cnt)):
+
+            # ===== 添加调试输出 =====
+            print(f"[DEBUG] Failed cell count check")
+            # ===== 调试输出结束 =====
+
             return False
 
         # 2. 大特征值检查
