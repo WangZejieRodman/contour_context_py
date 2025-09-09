@@ -8,6 +8,7 @@ from typing import List, Tuple, Dict, Optional, Any, Set
 from dataclasses import dataclass
 from sklearn.neighbors import NearestNeighbors
 import time
+import copy
 
 from contour_types import (
     ContourDBConfig, CandidateScoreEnsemble, ConstellationPair,
@@ -382,8 +383,8 @@ class CandidateManager:
             sim_ub: 相似性上界
         """
         self.cm_tgt = cm_tgt
-        self.sim_var = sim_lb  # 动态下界（会随着检测过程调整）
-        self.sim_ub = sim_ub   # 上界
+        self.sim_var = copy.deepcopy(sim_lb)  # 动态下界（会随着检测过程调整）
+        self.sim_ub = sim_ub  # 上界
 
         # 数据结构
         self.cand_id_pos_pair: Dict[int, int] = {}  # 候选ID到位置的映射
@@ -395,16 +396,21 @@ class CandidateManager:
         self.cand_aft_check2 = 0  # 第二轮检查后的候选数
         self.cand_aft_check3 = 0  # 第三轮检查后的候选数
 
+        # 动态阈值控制开关（对应C++的DYNAMIC_THRES宏）
+        self.enable_dynamic_thres = True
+
+        # 阈值调整限制参数
+        self.max_thres_increase_rate = 2.0  # 最大增长倍数
+        self.min_thres_change = 1  # 最小变化量
+        self.max_single_adjustment = 3  # 单次最大调整量
+
         # 验证阈值配置
-        # assert sim_lb.sim_constell.strict_smaller(sim_ub.sim_constell)
-        # assert sim_lb.sim_pair.strict_smaller(sim_ub.sim_pair)
-        # assert sim_lb.sim_post.strict_smaller(sim_ub.sim_post)
-        # 可选：添加警告而不是崩溃
-        if not sim_lb.sim_post.strict_smaller(sim_ub.sim_post):
-            print("Warning: sim_post lower bound may exceed upper bound due to dynamic adjustment")
+        assert sim_lb.sim_constell.strict_smaller(sim_ub.sim_constell)
+        assert sim_lb.sim_pair.strict_smaller(sim_ub.sim_pair)
+        assert sim_lb.sim_post.strict_smaller(sim_ub.sim_post)
 
     def check_cand_with_hint(self, cm_cand: ContourManager, anchor_pair: ConstellationPair,
-                           cont_sim) -> CandidateScoreEnsemble:
+                             cont_sim) -> CandidateScoreEnsemble:
         """
         使用提示检查候选
 
@@ -430,8 +436,9 @@ class CandidateManager:
 
         self.cand_aft_check1 += 1
 
-        print("Before check, curr bar:")
-        self._print_threshold_status()
+        if self.enable_dynamic_thres:
+            print("Before check, curr bar:")
+            self._print_threshold_status()
 
         # 检查2/4: 纯星座检查
         tmp_pairs1 = []
@@ -461,19 +468,144 @@ class CandidateManager:
         # 获取变换矩阵
         T_pass = self._get_tf_from_constell(cm_cand, self.cm_tgt, tmp_pairs2)
 
-        # 动态阈值更新
-        self._update_dynamic_thresholds(ret_pairwise_sim.cnt())
+        # 动态阈值更新（仅在启用时）
+        if self.enable_dynamic_thres:
+            self._update_dynamic_thresholds_safe(ret_pairwise_sim.cnt())
 
-        print("Cand passed. New dynamic bar:")
-        self._print_threshold_status()
+            print("Cand passed. New dynamic bar:")
+            self._print_threshold_status()
 
         # 添加到候选列表或更新现有候选
         self._add_or_update_candidate(cand_id, cm_cand, T_pass, tmp_pairs2, tmp_area_perc)
 
         return ret_score
 
+    def _update_dynamic_thresholds_safe(self, cnt_curr_valid: int):
+        """
+        安全的动态阈值更新机制，防止过度调整
+
+        Args:
+            cnt_curr_valid: 当前有效的对数量
+        """
+        if not self.enable_dynamic_thres:
+            return
+
+        # 保存当前阈值用于回滚
+        old_constell = copy.deepcopy(self.sim_var.sim_constell)
+        old_pair = copy.deepcopy(self.sim_var.sim_pair)
+
+        # 计算新的星座相似性阈值（保守调整）
+        new_const_lb = ScoreConstellSim()
+
+        # 使用渐进式调整而非直接设置为当前值
+        current_ovlp_sum = self.sim_var.sim_constell.i_ovlp_sum
+        current_ovlp_max = self.sim_var.sim_constell.i_ovlp_max_one
+        current_ang_rng = self.sim_var.sim_constell.i_in_ang_rng
+
+        # 限制单次调整幅度
+        max_increase = min(self.max_single_adjustment,
+                           max(self.min_thres_change,
+                               int(current_ovlp_sum * 0.5)))  # 最多增加50%
+
+        new_const_lb.i_ovlp_sum = min(cnt_curr_valid,
+                                      current_ovlp_sum + max_increase)
+        new_const_lb.i_ovlp_max_one = min(cnt_curr_valid,
+                                          current_ovlp_max + max_increase)
+        new_const_lb.i_in_ang_rng = min(cnt_curr_valid,
+                                        current_ang_rng + max_increase)
+
+        # 应用阈值约束
+        self._align_lb_constell_safe(new_const_lb)
+        self._align_ub_constell_safe()
+
+        # 计算新的成对相似性阈值（保守调整）
+        new_pair_lb = ScorePairwiseSim()
+
+        current_indiv = self.sim_var.sim_pair.i_indiv_sim
+        current_orie = self.sim_var.sim_pair.i_orie_sim
+
+        new_pair_lb.i_indiv_sim = min(cnt_curr_valid,
+                                      current_indiv + max_increase)
+        new_pair_lb.i_orie_sim = min(cnt_curr_valid,
+                                     current_orie + max_increase)
+
+        self._align_lb_pair_safe(new_pair_lb)
+        self._align_ub_pair_safe()
+
+        # 验证调整结果，如果超出合理范围则回滚
+        if self._is_threshold_reasonable():
+            pass  # 阈值合理，保持当前值
+        else:
+            # 回滚到之前的值
+            self.sim_var.sim_constell = old_constell
+            self.sim_var.sim_pair = old_pair
+            print("Threshold adjustment rolled back due to unreasonable values")
+
+    def _is_threshold_reasonable(self) -> bool:
+        """检查阈值是否在合理范围内"""
+        # 星座阈值不应超过20（经验值）
+        if (self.sim_var.sim_constell.i_ovlp_sum > 20 or
+                self.sim_var.sim_constell.i_ovlp_max_one > 20 or
+                self.sim_var.sim_constell.i_in_ang_rng > 20):
+            return False
+
+        # 成对阈值不应超过20
+        if (self.sim_var.sim_pair.i_indiv_sim > 20 or
+                self.sim_var.sim_pair.i_orie_sim > 20):
+            return False
+
+        # 阈值不应低于初始下界的一半
+        if (self.sim_var.sim_constell.i_in_ang_rng < 2 or
+                self.sim_var.sim_pair.i_orie_sim < 2):
+            return False
+
+        return True
+
+    def _align_lb_constell_safe(self, bar: ScoreConstellSim):
+        """安全地对齐星座下界，防止过度增长"""
+        # 限制增长幅度
+        max_ovlp_sum = min(bar.i_ovlp_sum,
+                           int(self.sim_var.sim_constell.i_ovlp_sum * self.max_thres_increase_rate))
+        max_ovlp_max = min(bar.i_ovlp_max_one,
+                           int(self.sim_var.sim_constell.i_ovlp_max_one * self.max_thres_increase_rate))
+        max_ang_rng = min(bar.i_in_ang_rng,
+                          int(self.sim_var.sim_constell.i_in_ang_rng * self.max_thres_increase_rate))
+
+        self.sim_var.sim_constell.i_ovlp_sum = max(self.sim_var.sim_constell.i_ovlp_sum,
+                                                   max_ovlp_sum)
+        self.sim_var.sim_constell.i_ovlp_max_one = max(self.sim_var.sim_constell.i_ovlp_max_one,
+                                                       max_ovlp_max)
+        self.sim_var.sim_constell.i_in_ang_rng = max(self.sim_var.sim_constell.i_in_ang_rng,
+                                                     max_ang_rng)
+
+    def _align_ub_constell_safe(self):
+        """安全地对齐星座上界"""
+        self.sim_var.sim_constell.i_ovlp_sum = min(self.sim_var.sim_constell.i_ovlp_sum,
+                                                   self.sim_ub.sim_constell.i_ovlp_sum)
+        self.sim_var.sim_constell.i_ovlp_max_one = min(self.sim_var.sim_constell.i_ovlp_max_one,
+                                                       self.sim_ub.sim_constell.i_ovlp_max_one)
+        self.sim_var.sim_constell.i_in_ang_rng = min(self.sim_var.sim_constell.i_in_ang_rng,
+                                                     self.sim_ub.sim_constell.i_in_ang_rng)
+
+    def _align_lb_pair_safe(self, bar: ScorePairwiseSim):
+        """安全地对齐成对下界"""
+        max_indiv = min(bar.i_indiv_sim,
+                        int(self.sim_var.sim_pair.i_indiv_sim * self.max_thres_increase_rate))
+        max_orie = min(bar.i_orie_sim,
+                       int(self.sim_var.sim_pair.i_orie_sim * self.max_thres_increase_rate))
+
+        self.sim_var.sim_pair.i_indiv_sim = max(self.sim_var.sim_pair.i_indiv_sim, max_indiv)
+        self.sim_var.sim_pair.i_orie_sim = max(self.sim_var.sim_pair.i_orie_sim, max_orie)
+
+    def _align_ub_pair_safe(self):
+        """安全地对齐成对上界"""
+        self.sim_var.sim_pair.i_indiv_sim = min(self.sim_var.sim_pair.i_indiv_sim,
+                                                self.sim_ub.sim_pair.i_indiv_sim)
+        self.sim_var.sim_pair.i_orie_sim = min(self.sim_var.sim_pair.i_orie_sim,
+                                               self.sim_ub.sim_pair.i_orie_sim)
+
     def _check_cont_pair_sim(self, src: ContourManager, tgt: ContourManager,
-                           cstl: ConstellationPair, cont_sim) -> bool:
+                             cstl: ConstellationPair, cont_sim) -> bool:
         """检查轮廓对相似性"""
         from contour_view import ContourView
         return ContourView.check_sim(
@@ -482,68 +614,31 @@ class CandidateManager:
             cont_sim)
 
     def _check_constell_sim(self, src: BCI, tgt: BCI, lb: ScoreConstellSim,
-                          constell_res: List[ConstellationPair]) -> ScoreConstellSim:
+                            constell_res: List[ConstellationPair]) -> ScoreConstellSim:
         """检查星座相似性"""
         return BCI.check_constell_sim(src, tgt, lb, constell_res)
 
     def _check_constell_corresp_sim(self, src: ContourManager, tgt: ContourManager,
-                                  cstl_in: List[ConstellationPair],
-                                  lb: ScorePairwiseSim, cont_sim) -> Tuple[ScorePairwiseSim, List[ConstellationPair], List[float]]:
+                                    cstl_in: List[ConstellationPair],
+                                    lb: ScorePairwiseSim, cont_sim) -> Tuple[
+        ScorePairwiseSim, List[ConstellationPair], List[float]]:
         """检查星座对应相似性"""
         return ContourManager.check_constell_corresp_sim(src, tgt, cstl_in, lb, cont_sim)
 
     def _get_tf_from_constell(self, src: ContourManager, tgt: ContourManager,
-                            cstl_pairs: List[ConstellationPair]) -> np.ndarray:
+                              cstl_pairs: List[ConstellationPair]) -> np.ndarray:
         """从星座计算变换矩阵"""
         return ContourManager.get_tf_from_constell(src, tgt, cstl_pairs)
 
-    def _update_dynamic_thresholds(self, cnt_curr_valid: int):
-        """更新动态阈值"""
-        # 更新星座相似性阈值
-        new_const_lb = ScoreConstellSim()
-        new_const_lb.i_ovlp_sum = cnt_curr_valid
-        new_const_lb.i_ovlp_max_one = cnt_curr_valid
-        new_const_lb.i_in_ang_rng = cnt_curr_valid
-        self._align_lb_constell(new_const_lb)
-        self._align_ub_constell()
-
-        # 更新成对相似性阈值
-        new_pair_lb = ScorePairwiseSim()
-        new_pair_lb.i_indiv_sim = cnt_curr_valid
-        new_pair_lb.i_orie_sim = cnt_curr_valid
-        self._align_lb_pair(new_pair_lb)
-        self._align_ub_pair()
-
-    def _align_lb_constell(self, bar: ScoreConstellSim):
-        """对齐星座下界"""
-        self.sim_var.sim_constell.i_ovlp_sum = max(self.sim_var.sim_constell.i_ovlp_sum, bar.i_ovlp_sum)
-        self.sim_var.sim_constell.i_ovlp_max_one = max(self.sim_var.sim_constell.i_ovlp_max_one, bar.i_ovlp_max_one)
-        self.sim_var.sim_constell.i_in_ang_rng = max(self.sim_var.sim_constell.i_in_ang_rng, bar.i_in_ang_rng)
-
-    def _align_ub_constell(self):
-        """对齐星座上界"""
-        self.sim_var.sim_constell.i_ovlp_sum = min(self.sim_var.sim_constell.i_ovlp_sum, self.sim_ub.sim_constell.i_ovlp_sum)
-        self.sim_var.sim_constell.i_ovlp_max_one = min(self.sim_var.sim_constell.i_ovlp_max_one, self.sim_ub.sim_constell.i_ovlp_max_one)
-        self.sim_var.sim_constell.i_in_ang_rng = min(self.sim_var.sim_constell.i_in_ang_rng, self.sim_ub.sim_constell.i_in_ang_rng)
-
-    def _align_lb_pair(self, bar: ScorePairwiseSim):
-        """对齐成对下界"""
-        self.sim_var.sim_pair.i_indiv_sim = max(self.sim_var.sim_pair.i_indiv_sim, bar.i_indiv_sim)
-        self.sim_var.sim_pair.i_orie_sim = max(self.sim_var.sim_pair.i_orie_sim, bar.i_orie_sim)
-
-    def _align_ub_pair(self):
-        """对齐成对上界"""
-        self.sim_var.sim_pair.i_indiv_sim = min(self.sim_var.sim_pair.i_indiv_sim, self.sim_ub.sim_pair.i_indiv_sim)
-        self.sim_var.sim_pair.i_orie_sim = min(self.sim_var.sim_pair.i_orie_sim, self.sim_ub.sim_pair.i_orie_sim)
-
     def _print_threshold_status(self):
         """打印当前阈值状态"""
-        print(f"Constell: {self.sim_var.sim_constell.i_ovlp_sum}, {self.sim_var.sim_constell.i_ovlp_max_one}, {self.sim_var.sim_constell.i_in_ang_rng}")
+        print(
+            f"Constell: {self.sim_var.sim_constell.i_ovlp_sum}, {self.sim_var.sim_constell.i_ovlp_max_one}, {self.sim_var.sim_constell.i_in_ang_rng}")
         print(f"Pair: {self.sim_var.sim_pair.i_indiv_sim}, {self.sim_var.sim_pair.i_orie_sim}")
 
     def _add_or_update_candidate(self, cand_id: int, cm_cand: ContourManager,
-                               T_pass: np.ndarray, tmp_pairs2: List[ConstellationPair],
-                               tmp_area_perc: List[float]):
+                                 T_pass: np.ndarray, tmp_pairs2: List[ConstellationPair],
+                                 tmp_area_perc: List[float]):
         """添加或更新候选"""
         cand_it = self.cand_id_pos_pair.get(cand_id)
         if cand_it is not None:
@@ -594,14 +689,15 @@ class CandidateManager:
                     candidate.anch_props[idx_sel], candidate.anch_props[0]
 
             # 总体测试1：面积百分比分数
-            print(f"Cand id:{candidate.cm_cand.get_int_id()}, @max# {candidate.anch_props[0].vote_cnt} votes, area perc: {candidate.anch_props[0].area_perc}")
+            print(
+                f"Cand id:{candidate.cm_cand.get_int_id()}, @max# {candidate.anch_props[0].vote_cnt} votes, area perc: {candidate.anch_props[0].area_perc}")
             if candidate.anch_props[0].area_perc < self.sim_var.sim_post.area_perc:
-                print(f"Low area skipped: {candidate.anch_props[0].area_perc:.6f} < {self.sim_var.sim_post.area_perc:.6f}")
+                print(
+                    f"Low area skipped: {candidate.anch_props[0].area_perc:.6f} < {self.sim_var.sim_post.area_perc:.6f}")
                 cnt_to_rm += 1
                 continue
 
             # 总体测试2：距离审查
-            # 正确的代码
             est_sens_tf = ConstellCorrelation.get_est_sens_tf(candidate.anch_props[0].T_delta,
                                                               self.cm_tgt.get_config())
             neg_est_trans_norm2d = -np.linalg.norm(est_sens_tf[:2, 2])
@@ -613,7 +709,7 @@ class CandidateManager:
             # 总体测试3：相关性分数
             corr_est = ConstellCorrelation(gmm_config)
             corr_score_init = corr_est.init_problem(candidate.cm_cand, self.cm_tgt,
-                                                   candidate.anch_props[0].T_delta)
+                                                    candidate.anch_props[0].T_delta)
 
             print(f"       :{candidate.cm_cand.get_int_id()}, init corr: {corr_score_init:.6f}")
 
@@ -622,13 +718,14 @@ class CandidateManager:
                 cnt_to_rm += 1
                 continue
 
-            # 通过测试，更新阈值变量
-            new_post_lb = ScorePostProc()
-            new_post_lb.correlation = corr_score_init
-            new_post_lb.area_perc = candidate.anch_props[0].area_perc
-            new_post_lb.neg_est_dist = neg_est_trans_norm2d
-            self._align_lb_post(new_post_lb)
-            self._align_ub_post()
+            # 通过测试，谨慎更新阈值变量
+            if self.enable_dynamic_thres:
+                new_post_lb = ScorePostProc()
+                new_post_lb.correlation = corr_score_init
+                new_post_lb.area_perc = candidate.anch_props[0].area_perc
+                new_post_lb.neg_est_dist = neg_est_trans_norm2d
+                self._align_lb_post_safe(new_post_lb)
+                self._align_ub_post_safe()
 
             candidate.anch_props[0].correlation = corr_score_init
             candidate.corr_est = corr_est
@@ -638,17 +735,28 @@ class CandidateManager:
         self.candidates = valid_candidates
         print(f"Tidy up pose remaining: {len(self.candidates)}")
 
-    def _align_lb_post(self, bar: ScorePostProc):
-        """对齐后处理下界"""
-        self.sim_var.sim_post.correlation = max(self.sim_var.sim_post.correlation, bar.correlation)
-        self.sim_var.sim_post.area_perc = max(self.sim_var.sim_post.area_perc, bar.area_perc)
-        self.sim_var.sim_post.neg_est_dist = max(self.sim_var.sim_post.neg_est_dist, bar.neg_est_dist)
+    def _align_lb_post_safe(self, bar: ScorePostProc):
+        """安全地对齐后处理下界"""
+        # 限制相关性阈值的增长
+        max_corr_increase = 0.1  # 每次最多增加0.1
+        new_correlation = min(bar.correlation,
+                              self.sim_var.sim_post.correlation + max_corr_increase)
 
-    def _align_ub_post(self):
-        """对齐后处理上界"""
-        self.sim_var.sim_post.correlation = min(self.sim_var.sim_post.correlation, self.sim_ub.sim_post.correlation)
-        self.sim_var.sim_post.area_perc = min(self.sim_var.sim_post.area_perc, self.sim_ub.sim_post.area_perc)
-        self.sim_var.sim_post.neg_est_dist = min(self.sim_var.sim_post.neg_est_dist, self.sim_ub.sim_post.neg_est_dist)
+        self.sim_var.sim_post.correlation = max(self.sim_var.sim_post.correlation,
+                                                new_correlation)
+        self.sim_var.sim_post.area_perc = max(self.sim_var.sim_post.area_perc,
+                                              bar.area_perc)
+        self.sim_var.sim_post.neg_est_dist = max(self.sim_var.sim_post.neg_est_dist,
+                                                 bar.neg_est_dist)
+
+    def _align_ub_post_safe(self):
+        """安全地对齐后处理上界"""
+        self.sim_var.sim_post.correlation = min(self.sim_var.sim_post.correlation,
+                                                self.sim_ub.sim_post.correlation)
+        self.sim_var.sim_post.area_perc = min(self.sim_var.sim_post.area_perc,
+                                              self.sim_ub.sim_post.area_perc)
+        self.sim_var.sim_post.neg_est_dist = min(self.sim_var.sim_post.neg_est_dist,
+                                                 self.sim_ub.sim_post.neg_est_dist)
 
     def fine_optimize(self, max_fine_opt: int) -> Tuple[List[ContourManager], List[float], List[np.ndarray]]:
         """精细优化 - 选择有希望的姿态候选并优化精确姿态估计"""
@@ -687,6 +795,14 @@ class CandidateManager:
             print(f"correlation: {self.candidates[i].anch_props[0].correlation:.6f}")
 
         return res_cand, res_corr, res_T
+
+    def set_dynamic_threshold_enabled(self, enabled: bool):
+        """设置动态阈值是否启用"""
+        self.enable_dynamic_thres = enabled
+        if not enabled:
+            print("Dynamic threshold adjustment disabled")
+        else:
+            print("Dynamic threshold adjustment enabled")
 
 
 class ContourDB:
