@@ -276,6 +276,9 @@ class ConstellCorrelation:
         theta_init = np.arctan2(self.T_best[1, 0], self.T_best[0, 0])
 
         initial_params = np.array([x_init, y_init, theta_init])
+        # 🔧 添加调试信息
+        print(f"Before optimization: translation = {self.T_best[:2, 2]}")
+        print(f"Before optimization: rotation = {np.arctan2(self.T_best[1, 0], self.T_best[0, 0])}")
 
         # 优化
         result = minimize(
@@ -304,21 +307,14 @@ class ConstellCorrelation:
                     self.auto_corr_src > 0 and self.auto_corr_tgt > 0) else 0.0
 
         print(f"Correlation: {correlation:.6f}")
+        print(f"After optimization: translation = {self.T_best[:2, 2]}")
+        print(f"After optimization: rotation = {np.arctan2(self.T_best[1, 0], self.T_best[0, 0])}")
 
         return correlation, self.T_best
 
     @staticmethod
     def get_est_sens_tf(T_delta: np.ndarray, bev_config) -> np.ndarray:
-        """
-        获取估计的传感器变换
-
-        Args:
-            T_delta: 图像原点坐标系中的变换
-            bev_config: BEV配置
-
-        Returns:
-            传感器坐标系中的变换矩阵
-        """
+        """获取估计的传感器变换"""
         # 忽略非正方形分辨率
         assert bev_config.reso_row == bev_config.reso_col
 
@@ -328,9 +324,8 @@ class ConstellCorrelation:
                                      bev_config.n_col / 2 - 0.5])
         T_to_tsen = T_so_ssen.copy()
 
-        # 计算传感器坐标系中的变换
-        T_so_ssen_inv = np.linalg.inv(T_so_ssen)
-        T_tsen_ssen2_est = T_to_tsen @ T_so_ssen_inv @ T_delta @ T_so_ssen
+        # 计算传感器坐标系中的变换 - 修正矩阵乘法顺序
+        T_tsen_ssen2_est = np.linalg.inv(T_to_tsen) @ T_delta @ T_so_ssen
 
         # 缩放平移部分
         T_tsen_ssen2_est[:2, 2] *= bev_config.reso_row
