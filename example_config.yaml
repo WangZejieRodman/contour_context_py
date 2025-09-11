@@ -2,9 +2,9 @@
 # 轮廓上下文回环检测 - 配置示例
 
 # 数据文件路径
-fpath_sens_gt_pose: "/path/to/ts-sens_pose-kitti00.txt"
-fpath_lidar_bins: "/path/to/ts-lidar_bins-kitti00.txt"
-fpath_outcome_sav: "/path/to/results/outcome-kitti00.txt"
+fpath_sens_gt_pose: "/home/wzj/pan1/contour_context_ws/src/contour-context/sample_data/ts-sens_pose-kitti00.txt"
+fpath_lidar_bins: "/home/wzj/pan1/contour_context_ws/src/contour-context/sample_data/ts-lidar_bins-kitti00.txt"
+fpath_outcome_sav: "/home/wzj/pan1/contour_context_py/outcome-kitti00.txt"
 
 # 相关性阈值
 correlation_thres: 0.64928
