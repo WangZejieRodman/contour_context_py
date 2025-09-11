@@ -26,12 +26,12 @@ class ContourViewStatConfig:
 @dataclass
 class ContourSimThresConfig:
     """轮廓相似性阈值配置"""
-    ta_cell_cnt: float = 6.0
-    tp_cell_cnt: float = 0.2
-    tp_eigval: float = 0.2
-    ta_h_bar: float = 0.3  # KITTI用，MulRan用0.75
-    ta_rcom: float = 0.4
-    tp_rcom: float = 0.25
+    ta_cell_cnt: float = 20.0      # 放宽到20 (原来6.0)
+    tp_cell_cnt: float = 0.5       # 放宽到50% (原来20%)
+    tp_eigval: float = 0.5         # 放宽到50% (原来20%)
+    ta_h_bar: float = 1.0          # 放宽到1.0 (原来0.3)
+    ta_rcom: float = 2.0           # 放宽到2.0 (原来0.4)
+    tp_rcom: float = 0.8           # 放宽到80% (原来25%)
 
 @dataclass
 class TreeBucketConfig:
@@ -352,11 +352,23 @@ def clamp_angle(ang: float) -> float:
 
 def diff_perc(num1: float, num2: float, perc: float) -> bool:
     """检查两个数的百分比差异是否超过阈值"""
-    return abs((num1 - num2) / max(num1, num2)) > perc
+    if max(num1, num2) == 0:
+        return num1 != num2
+    diff_ratio = abs((num1 - num2) / max(num1, num2))
+    result = diff_ratio > perc
+    # ===== 添加调试输出 =====
+    print(f"[DEBUG] diff_perc({num1}, {num2}, {perc}): diff_ratio={diff_ratio:.3f}, result={result}")
+    # ===== 调试输出结束 =====
+    return result
 
 def diff_delt(num1: float, num2: float, delta: float) -> bool:
     """检查两个数的绝对差异是否超过阈值"""
-    return abs(num1 - num2) > delta
+    abs_diff = abs(num1 - num2)
+    result = abs_diff > delta
+    # ===== 添加调试输出 =====
+    print(f"[DEBUG] diff_delt({num1}, {num2}, {delta}): abs_diff={abs_diff}, result={result}")
+    # ===== 调试输出结束 =====
+    return result
 
 def gauss_pdf(x: float, mean: float, sd: float) -> float:
     """高斯概率密度函数"""
