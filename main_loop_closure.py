@@ -82,6 +82,12 @@ class LoopClosureDetector:
         self.db_config.cont_sim_cfg.ta_h_bar = cs_cfg['ta_h_bar']
         self.db_config.cont_sim_cfg.ta_rcom = cs_cfg['ta_rcom']
         self.db_config.cont_sim_cfg.tp_rcom = cs_cfg['tp_rcom']
+        # ===== 添加调试输出 =====
+        print(f"[DEBUG] Contour similarity thresholds:")
+        print(f"  ta_cell_cnt (absolute): {self.db_config.cont_sim_cfg.ta_cell_cnt}")
+        print(f"  tp_cell_cnt (percentage): {self.db_config.cont_sim_cfg.tp_cell_cnt}")
+        print(f"  ta_h_bar: {self.db_config.cont_sim_cfg.ta_h_bar}")
+        # ===== 调试输出结束 =====
 
         # 初始化数据库
         self.contour_db = ContourDB(self.db_config)
