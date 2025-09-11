@@ -112,8 +112,20 @@ class ContourView:
         Returns:
             是否相似
         """
+        # ===== 添加更详细的调试输出 =====
+        print(f"[DEBUG] Contour similarity check:")
+        print(f"  src: {cont_src.cell_cnt} cells, tgt: {cont_tgt.cell_cnt} cells")
+        print(f"  thresholds: tp_cell_cnt={simthres.tp_cell_cnt}, ta_cell_cnt={simthres.ta_cell_cnt}")
+
+        # 计算具体的差异
+        perc_diff = abs((cont_src.cell_cnt - cont_tgt.cell_cnt) / max(cont_src.cell_cnt, cont_tgt.cell_cnt))
+        abs_diff = abs(cont_src.cell_cnt - cont_tgt.cell_cnt)
+        print(f"  percentage diff: {perc_diff:.3f} (threshold: {simthres.tp_cell_cnt})")
+        print(f"  absolute diff: {abs_diff} (threshold: {simthres.ta_cell_cnt})")
+        # ===== 调试输出结束 =====
+
         # 1. 面积检查
-        if (diff_perc(cont_src.cell_cnt, cont_tgt.cell_cnt, simthres.tp_cell_cnt) or
+        if (diff_perc(cont_src.cell_cnt, cont_tgt.cell_cnt, simthres.tp_cell_cnt) and
                 diff_delt(cont_src.cell_cnt, cont_tgt.cell_cnt, simthres.ta_cell_cnt)):
 
             # ===== 添加调试输出 =====
