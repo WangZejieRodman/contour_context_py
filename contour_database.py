@@ -912,6 +912,17 @@ class CandidateManager:
             est_sens_tf = ConstellCorrelation.get_est_sens_tf(candidate.anch_props[0].T_delta,
                                                               self.cm_tgt.get_config())
             neg_est_trans_norm2d = -np.linalg.norm(est_sens_tf[:2, 2])
+
+            # ===== 添加详细调试输出 =====
+            print(f"[DEBUG] Distance calculation for candidate {candidate.cm_cand.get_int_id()}:")
+            print(f"  T_delta:\n{candidate.anch_props[0].T_delta}")
+            print(f"  est_sens_tf:\n{est_sens_tf}")
+            print(f"  estimated 2D distance: {np.linalg.norm(est_sens_tf[:2, 2]):.2f} meters")
+            print(f"  neg_est_trans_norm2d: {neg_est_trans_norm2d:.2f}")
+            print(f"  threshold: {self.sim_var.sim_post.neg_est_dist:.2f}")
+            # ===== 调试输出结束 =====
+
+            # 临时注释掉距离检查
             if neg_est_trans_norm2d < self.sim_var.sim_post.neg_est_dist:
                 print(f"Low dist skipped: {neg_est_trans_norm2d:.6f} < {self.sim_var.sim_post.neg_est_dist:.6f}")
                 cnt_to_rm += 1
