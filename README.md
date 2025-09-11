@@ -24,9 +24,6 @@ contour-context-python/
 ├── correlation.py            # GMM相关性计算和优化
 ├── evaluator.py              # 评估器，数据加载和性能评估
 ├── main_loop_closure.py      # 主回环检测流程
-├── usage_example.py          # 使用示例和测试
-├── requirements.txt          # Python依赖
-├── example_config.yaml       # 示例配置文件
 └── README.md                 # 本文档
 ```
 
@@ -92,21 +89,7 @@ python main_loop_closure.py --config your_config.yaml --output-dir ./results
 
 结果将保存在指定的输出目录中：
 - `loop_closure_results.json`: 详细统计结果
-- `results.txt`: 每个扫描的预测结果
-
-## 快速测试
-
-运行内置的测试示例：
-
-```bash
-python usage_example.py
-```
-
-这将：
-1. 生成合成点云数据
-2. 测试轮廓提取功能
-3. 创建示例数据文件
-4. 运行小规模的回环检测演示
+- `outcome-kitti00.txt`: 每个扫描的预测结果
 
 ## 算法详解
 
@@ -168,15 +151,6 @@ python usage_example.py
 ### 阈值参数
 - `correlation_thres`: 回环检测的相关性阈值
 - `thres_lb/thres_ub`: 各检查阶段的上下界阈值
-
-## 实验结果
-
-系统在标准数据集上的性能：
-
-| 数据集 | 精度 | 召回率 | F1分数 | 平均处理时间 |
-|--------|------|--------|--------|--------------|
-| KITTI  | 0.95 | 0.87   | 0.91   | 0.12s       |
-| MulRan | 0.92 | 0.84   | 0.88   | 0.15s       |
 
 ## 故障排除
 
