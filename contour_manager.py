@@ -1,6 +1,6 @@
 """
 Contour Context Loop Closure Detection - Contour Manager
-轮廓管理器实现
+轮廓管理器实现 - 修复版本
 """
 
 import numpy as np
@@ -368,6 +368,11 @@ class ContourManager:
             bit_offset = bl * BITS_PER_LAYER
             layer_idx = DIST_BIN_LAYERS[bl]
 
+            # 添加边界检查
+            if layer_idx >= len(self.cont_views):
+                print(f"Warning: layer_idx {layer_idx} >= len(cont_views) {len(self.cont_views)}")
+                continue
+
             for j in range(min(self.cfg.dist_firsts, len(self.cont_views[layer_idx]))):
                 if ll != layer_idx or j != seq:
                     # 计算相对位置
@@ -587,18 +592,13 @@ class ContourManager:
 def umeyama_2d(src_points: np.ndarray, dst_points: np.ndarray) -> np.ndarray:
     """
     2D Umeyama算法计算相似变换
-
-    Args:
-        src_points: 源点集 (2, N)
-        dst_points: 目标点集 (2, N)
-
-    Returns:
-        3x3变换矩阵
     """
     assert src_points.shape == dst_points.shape
     assert src_points.shape[0] == 2
 
     n = src_points.shape[1]
+    if n < 2:
+        return np.eye(3)  # 🔧 处理边界情况
 
     # 计算质心
     mu_src = np.mean(src_points, axis=1, keepdims=True)
@@ -621,6 +621,10 @@ def umeyama_2d(src_points: np.ndarray, dst_points: np.ndarray) -> np.ndarray:
     if np.linalg.det(R) < 0:
         Vt[-1, :] *= -1
         R = Vt.T @ U.T
+
+    # 🔧 添加数值稳定性检查
+    if np.abs(np.linalg.det(R) - 1.0) > 1e-6:
+        print(f"Warning: Rotation matrix determinant = {np.linalg.det(R)}")
 
     # 计算平移
     t = mu_dst - R @ mu_src
