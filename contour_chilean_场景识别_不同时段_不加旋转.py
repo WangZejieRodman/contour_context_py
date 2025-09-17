@@ -13,6 +13,9 @@ import pickle
 import time
 from typing import List, Dict, Tuple, Optional
 import logging
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.colors import ListedColormap
 
 # 导入Contour Context相关模块
 from contour_types import (
@@ -29,7 +32,7 @@ class ChileanContourEvaluator:
     def __init__(self, dataset_folder: str,
                  database_file: str = 'chilean_NoRot_NoScale_5cm_evaluation_database_100_100.pickle',
                  query_file: str = 'chilean_NoRot_NoScale_5cm_evaluation_query_180_180.pickle',
-                 log_file: str = 'contour_chilean_不同时段_log.txt'):
+                 log_file: str = 'contour_chilean_不相同时段_log.txt'):
         self.dataset_folder = dataset_folder
         self.database_file = database_file
         self.query_file = query_file
@@ -67,21 +70,24 @@ class ChileanContourEvaluator:
         self.logger.info(f"评估任务：历史地图(100-100) vs 当前观测(180-180)")
         self.processed_cloud_count = 0
 
+        # ✅ 添加可视化器
+        self.visualizer = ContourVisualizer()
+
     def create_contour_manager_config(self) -> ContourManagerConfig:
         """为Chilean数据集创建轮廓管理器配置"""
         config = ContourManagerConfig()
 
         # 根据Chilean地下矿井环境调整参数
-        config.lv_grads = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0]  # 高度阈值
-        config.reso_row = 0.5  # 提高分辨率
-        config.reso_col = 0.5
+        config.lv_grads = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  # 高度阈值
+        config.reso_row = 0.2  # 提高分辨率
+        config.reso_col = 0.2
         config.n_row = 200  # 增大网格以适应地下环境
         config.n_col = 200
-        config.lidar_height = 1.0  # 地下环境激光雷达高度较低
-        config.blind_sq = 4.0  # 减小盲区
-        config.min_cont_key_cnt = 6  # 降低最小轮廓键数量
-        config.min_cont_cell_cnt = 2  # 降低最小轮廓像素数量
-        config.piv_firsts = 8  # 增加关键轮廓数量
+        config.lidar_height = 0.0  # 地下环境激光雷达高度较低
+        config.blind_sq = 0.0  # 减小盲区
+        config.min_cont_key_cnt = 2  # 降低最小轮廓键数量
+        config.min_cont_cell_cnt = 1  # 降低最小轮廓像素数量
+        config.piv_firsts = 12  # 增加关键轮廓数量
         config.dist_firsts = 12
         config.roi_radius = 15.0  # 增大感兴趣区域半径
 
@@ -433,92 +439,135 @@ class ChileanContourEvaluator:
             'total_queries': 0
         }
 
-        for query_key in sorted(query_set.keys()):
-            query_item = query_set[query_key]
-            failure_statistics['total_queries'] += 1
+        # ✅ 创建失败日志文件
+        failure_log_path = f"query_failure_analysis_session_{180 + query_set_idx}_to_{100 + database_set_idx}.txt"
+        failure_log = open(failure_log_path, 'w', encoding='utf-8')
+        failure_log.write("=== 查询失败详细分析报告 ===\n")
+        failure_log.write(f"查询时间段: {180 + query_set_idx}\n")
+        failure_log.write(f"数据库时间段: {100 + database_set_idx}\n")
+        failure_log.write(f"生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        failure_log.write("=" * 50 + "\n\n")
 
-            # 检查ground truth
-            if database_set_idx not in query_item:
-                failure_statistics['no_ground_truth'] += 1
-                continue
+        try:
+            for query_key in sorted(query_set.keys()):
+                query_item = query_set[query_key]
+                failure_statistics['total_queries'] += 1
 
-            true_neighbors = query_item[database_set_idx]
-            if len(true_neighbors) == 0:
-                failure_statistics['no_ground_truth'] += 1
-                continue
-
-            num_evaluated += 1
-
-            # 加载查询点云
-            filename = query_item['query']
-            pointcloud = self.load_chilean_pointcloud(filename)
-            if len(pointcloud) == 0:
-                failure_statistics['pointcloud_load_failed'] += 1
-                continue
-
-            # 应用随机旋转
-            # pointcloud = self.apply_random_rotation(pointcloud)
-
-            # 创建查询轮廓管理器
-            query_cm = ContourManager(self.cm_config, query_key + 10000)  # 避免ID冲突
-            str_id = f"query_session_{180 + query_set_idx}_frame_{query_key}"
-            query_cm.make_bev(pointcloud, str_id)
-            query_cm.make_contours_recursive()
-
-            # 在数据库中检索
-            try:
-                candidate_cms, correlations, transforms = self.contour_db.query_ranged_knn(
-                    query_cm, self.thres_lb, self.thres_ub)
-
-                if len(candidate_cms) == 0:
-                    failure_statistics['no_retrieval_results'] += 1
+                # 检查ground truth
+                if database_set_idx not in query_item:
+                    failure_statistics['no_ground_truth'] += 1
+                    self._log_failure(failure_log, query_key, "NO_GROUND_TRUTH",
+                                      "缺少真值标注", query_item)
                     continue
 
-                # 将候选CM ID映射回数据库索引
-                results = []
-                for i, (candidate_cm, correlation) in enumerate(zip(candidate_cms, correlations)):
-                    # 假设数据库CM的ID就是其在database_cms中的索引
-                    db_idx = candidate_cm.get_int_id()
-                    if db_idx < len(self.database_cms):
-                        distance = 1.0 - correlation  # 将相关性转换为距离
-                        results.append((db_idx, distance))
-
-                if len(results) == 0:
-                    failure_statistics['no_retrieval_results'] += 1
+                true_neighbors = query_item[database_set_idx]
+                if len(true_neighbors) == 0:
+                    failure_statistics['no_ground_truth'] += 1
+                    self._log_failure(failure_log, query_key, "EMPTY_GROUND_TRUTH",
+                                      "真值标注为空", query_item)
                     continue
 
-                # 按距离排序，返回前k个
-                results.sort(key=lambda x: x[1])
-                results = results[:k]
+                num_evaluated += 1
 
-                indices = [result[0] for result in results]
+                # 加载查询点云
+                filename = query_item['query']
+                pointcloud = self.load_chilean_pointcloud(filename)
+                if len(pointcloud) == 0:
+                    failure_statistics['pointcloud_load_failed'] += 1
+                    self._log_failure(failure_log, query_key, "POINTCLOUD_LOAD_FAILED",
+                                      f"点云加载失败: {filename}", query_item)
+                    continue
 
-            except Exception as e:
-                self.logger.error(f"查询失败: {e}")
-                failure_statistics['no_retrieval_results'] += 1
-                continue
+                # 创建查询轮廓管理器
+                query_cm = ContourManager(self.cm_config, query_key + 10000)  # 避免ID冲突
+                str_id = f"query_session_{180 + query_set_idx}_frame_{query_key}"
+                query_cm.make_bev(pointcloud, str_id)
+                query_cm.make_contours_recursive()
 
-            # 检查是否有有效匹配
-            has_valid_match = False
-            for j, idx in enumerate(indices):
-                if idx in true_neighbors:
-                    has_valid_match = True
-                    if j == 0:
-                        similarity = 1.0 - results[0][1]
-                        top1_similarity_score.append(similarity)
-                    for k_idx in range(j, len(recall)):
-                        recall[k_idx] += 1
-                    break
+                # ✅ 预检查：收集轮廓和特征键信息（在失败时使用）
+                contour_info = self._collect_contour_info(query_cm)
+                feature_key_info = self._collect_feature_key_info(query_cm)
 
-            if not has_valid_match:
-                failure_statistics['no_valid_matches'] += 1
+                # 在数据库中检索
+                try:
+                    candidate_cms, correlations, transforms = self.contour_db.query_ranged_knn(
+                        query_cm, self.thres_lb, self.thres_ub)
 
-            # 计算top 1% recall
-            top_percent_indices = indices[:threshold]
-            if len(set(top_percent_indices).intersection(set(true_neighbors))) > 0:
-                one_percent_retrieved += 1
+                    if len(candidate_cms) == 0:
+                        failure_statistics['no_retrieval_results'] += 1
+                        self._log_retrieval_failure(failure_log, query_key, query_item,
+                                                    contour_info, feature_key_info,
+                                                    pointcloud.shape, "KNN搜索返回空结果")
+                        continue
 
-        # 记录失败统计
+                    # 将候选CM ID映射回数据库索引
+                    results = []
+                    for i, (candidate_cm, correlation) in enumerate(zip(candidate_cms, correlations)):
+                        # 假设数据库CM的ID就是其在database_cms中的索引
+                        db_idx = candidate_cm.get_int_id()
+                        if db_idx < len(self.database_cms):
+                            distance = 1.0 - correlation  # 将相关性转换为距离
+                            results.append((db_idx, distance))
+
+                    if len(results) == 0:
+                        failure_statistics['no_retrieval_results'] += 1
+                        self._log_retrieval_failure(failure_log, query_key, query_item,
+                                                    contour_info, feature_key_info,
+                                                    pointcloud.shape,
+                                                    f"候选映射失败: {len(candidate_cms)} 个候选无法映射")
+                        continue
+
+                    # 按距离排序，返回前k个
+                    results.sort(key=lambda x: x[1])
+                    results = results[:k]
+
+                    indices = [result[0] for result in results]
+
+                except Exception as e:
+                    self.logger.error(f"查询失败: {e}")
+                    failure_statistics['no_retrieval_results'] += 1
+                    self._log_retrieval_failure(failure_log, query_key, query_item,
+                                                contour_info, feature_key_info,
+                                                pointcloud.shape,
+                                                f"查询异常: {str(e)}")
+                    continue
+
+                # 检查是否有有效匹配
+                has_valid_match = False
+                for j, idx in enumerate(indices):
+                    if idx in true_neighbors:
+                        has_valid_match = True
+                        if j == 0:
+                            similarity = 1.0 - results[0][1]
+                            top1_similarity_score.append(similarity)
+                        for k_idx in range(j, len(recall)):
+                            recall[k_idx] += 1
+                        break
+
+                if not has_valid_match:
+                    failure_statistics['no_valid_matches'] += 1
+                    self._log_matching_failure(failure_log, query_key, query_item,
+                                               contour_info, feature_key_info,
+                                               pointcloud.shape, indices, true_neighbors)
+
+                # 计算top 1% recall
+                top_percent_indices = indices[:threshold]
+                if len(set(top_percent_indices).intersection(set(true_neighbors))) > 0:
+                    one_percent_retrieved += 1
+
+        finally:
+            # ✅ 关闭失败日志文件
+            failure_log.write(f"\n=== 失败统计汇总 ===\n")
+            failure_log.write(f"总查询数: {failure_statistics['total_queries']}\n")
+            failure_log.write(f"成功评估数: {num_evaluated}\n")
+            for reason, count in failure_statistics.items():
+                if reason != 'total_queries' and count > 0:
+                    failure_log.write(f"{reason}: {count}\n")
+            failure_log.close()
+
+            self.logger.info(f"失败分析报告已保存到: {failure_log_path}")
+
+        # 记录失败统计到主日志
         if failure_statistics['total_queries'] > 0:
             self.logger.info(f"\n=== 失败查询分析 (DB{database_set_idx} <- Query{query_set_idx}) ===")
             self.logger.info(f"总查询数: {failure_statistics['total_queries']}")
@@ -535,6 +584,153 @@ class ChileanContourEvaluator:
             one_percent_recall = 0
 
         return recall, top1_similarity_score, one_percent_recall
+
+    def _collect_contour_info(self, query_cm: ContourManager) -> dict:
+        """收集轮廓信息用于失败分析"""
+        contour_info = {
+            'total_contours': 0,
+            'contours_per_level': [],
+            'bev_stats': {}
+        }
+
+        for ll in range(len(self.cm_config.lv_grads)):
+            contours = query_cm.get_lev_contours(ll)
+            level_info = {
+                'level': ll,
+                'height_threshold': self.cm_config.lv_grads[ll],
+                'contour_count': len(contours),
+                'contour_details': []
+            }
+
+            for seq, contour in enumerate(contours[:5]):  # 只记录前5个
+                level_info['contour_details'].append({
+                    'seq': seq,
+                    'cell_cnt': contour.cell_cnt,
+                    'eig_vals': contour.eig_vals.tolist() if hasattr(contour, 'eig_vals') else [0, 0],
+                    'pos_mean': contour.pos_mean.tolist() if hasattr(contour, 'pos_mean') else [0, 0]
+                })
+
+            contour_info['contours_per_level'].append(level_info)
+            contour_info['total_contours'] += len(contours)
+
+        # BEV统计
+        if hasattr(query_cm, 'bev') and query_cm.bev is not None:
+            for ll in range(len(self.cm_config.lv_grads)):
+                non_empty = np.sum(query_cm.bev > self.cm_config.lv_grads[ll])
+                contour_info['bev_stats'][f'level_{ll}_pixels'] = int(non_empty)
+
+        return contour_info
+
+    def _collect_feature_key_info(self, query_cm: ContourManager) -> dict:
+        """收集特征键信息用于失败分析"""
+        feature_info = {
+            'total_keys': 0,
+            'zero_keys': 0,
+            'valid_keys': 0,
+            'key_details': []
+        }
+
+        for ll in range(len(self.cm_config.lv_grads)):
+            keys = query_cm.get_lev_retrieval_key(ll)
+            for seq, key in enumerate(keys):
+                key_sum = np.sum(key)
+                key_detail = {
+                    'level': ll,
+                    'seq': seq,
+                    'key_sum': float(key_sum),
+                    'key_first_3': key[:3].tolist() if len(key) >= 3 else key.tolist(),
+                    'is_zero': key_sum == 0
+                }
+
+                feature_info['key_details'].append(key_detail)
+                feature_info['total_keys'] += 1
+
+                if key_sum == 0:
+                    feature_info['zero_keys'] += 1
+                else:
+                    feature_info['valid_keys'] += 1
+
+        return feature_info
+
+    def _log_failure(self, failure_log, query_key: int, failure_type: str,
+                     reason: str, query_item: dict):
+        """记录简单失败情况"""
+        failure_log.write(f"【失败案例 {failure_type}】\n")
+        failure_log.write(f"查询ID: {query_key}\n")
+        failure_log.write(f"失败原因: {reason}\n")
+        failure_log.write(f"查询文件: {query_item.get('query', 'unknown')}\n")
+        if 'northing' in query_item:
+            failure_log.write(f"查询坐标: ({query_item['northing']:.2f}, {query_item['easting']:.2f})\n")
+        failure_log.write("-" * 40 + "\n\n")
+
+    def _log_retrieval_failure(self, failure_log, query_key: int, query_item: dict,
+                               contour_info: dict, feature_key_info: dict,
+                               pointcloud_shape: tuple, reason: str):
+        """记录检索失败的详细信息"""
+        failure_log.write(f"【检索失败详细分析】\n")
+        failure_log.write(f"查询ID: {query_key}\n")
+        failure_log.write(f"失败原因: {reason}\n")
+        failure_log.write(f"查询文件: {query_item.get('query', 'unknown')}\n")
+        if 'northing' in query_item:
+            failure_log.write(f"查询坐标: ({query_item['northing']:.2f}, {query_item['easting']:.2f})\n")
+        failure_log.write(f"点云大小: {pointcloud_shape}\n")
+
+        # 轮廓信息
+        failure_log.write(f"\n轮廓提取情况:\n")
+        failure_log.write(f"  总轮廓数: {contour_info['total_contours']}\n")
+        for level_info in contour_info['contours_per_level']:
+            failure_log.write(f"  L{level_info['level']} (h>{level_info['height_threshold']}): "
+                              f"{level_info['contour_count']} 个轮廓\n")
+            for detail in level_info['contour_details']:
+                failure_log.write(f"    S{detail['seq']}: cells={detail['cell_cnt']}, "
+                                  f"eig_vals={detail['eig_vals']}\n")
+
+        # BEV像素统计
+        if contour_info['bev_stats']:
+            failure_log.write(f"\nBEV像素统计:\n")
+            for level_key, pixel_count in contour_info['bev_stats'].items():
+                failure_log.write(f"  {level_key}: {pixel_count} 像素\n")
+
+        # 特征键信息
+        failure_log.write(f"\n特征键生成情况:\n")
+        failure_log.write(f"  总特征键数: {feature_key_info['total_keys']}\n")
+        failure_log.write(f"  全0键数量: {feature_key_info['zero_keys']}\n")
+        failure_log.write(f"  有效键数量: {feature_key_info['valid_keys']}\n")
+
+        # 详细键信息
+        failure_log.write(f"  键详情:\n")
+        for key_detail in feature_key_info['key_details']:
+            status = "❌全0" if key_detail['is_zero'] else "✅有效"
+            failure_log.write(f"    L{key_detail['level']}S{key_detail['seq']}: "
+                              f"{status}, sum={key_detail['key_sum']:.6f}, "
+                              f"first3={key_detail['key_first_3']}\n")
+
+        failure_log.write("=" * 50 + "\n\n")
+
+    def _log_matching_failure(self, failure_log, query_key: int, query_item: dict,
+                              contour_info: dict, feature_key_info: dict,
+                              pointcloud_shape: tuple, retrieved_indices: list,
+                              true_neighbors: list):
+        """记录匹配失败的详细信息"""
+        failure_log.write(f"【匹配失败详细分析】\n")
+        failure_log.write(f"查询ID: {query_key}\n")
+        failure_log.write(f"失败原因: 检索成功但无有效匹配\n")
+        failure_log.write(f"查询文件: {query_item.get('query', 'unknown')}\n")
+        if 'northing' in query_item:
+            failure_log.write(f"查询坐标: ({query_item['northing']:.2f}, {query_item['easting']:.2f})\n")
+        failure_log.write(f"点云大小: {pointcloud_shape}\n")
+
+        failure_log.write(f"\n检索结果分析:\n")
+        failure_log.write(f"  检索到的索引: {retrieved_indices[:10]}{'...' if len(retrieved_indices) > 10 else ''}\n")
+        failure_log.write(f"  真值索引: {true_neighbors[:10]}{'...' if len(true_neighbors) > 10 else ''}\n")
+        failure_log.write(f"  交集: {list(set(retrieved_indices) & set(true_neighbors))}\n")
+
+        # 简化的轮廓和特征信息
+        failure_log.write(f"\n简要特征信息:\n")
+        failure_log.write(f"  总轮廓数: {contour_info['total_contours']}\n")
+        failure_log.write(f"  有效特征键: {feature_key_info['valid_keys']}/{feature_key_info['total_keys']}\n")
+
+        failure_log.write("=" * 50 + "\n\n")
 
     def evaluate(self) -> float:
         """执行完整评估"""
@@ -603,7 +799,7 @@ class ChileanContourEvaluator:
         if not os.path.exists(results_dir):
             os.makedirs(results_dir)
 
-        output_file = os.path.join(results_dir, "contour_results_chilean_不同时段_session.txt")
+        output_file = os.path.join(results_dir, "contour_results_chilean_不相同时段_session.txt")
 
         with open(output_file, "w") as f:
             f.write("Chilean Dataset Contour Context Evaluation Results\n")
@@ -620,6 +816,628 @@ class ChileanContourEvaluator:
 
         self.logger.info(f"结果已保存到: {output_file}")
 
+    def visualize_sample_cases(self):
+        """可视化示例案例"""
+
+        print(f"\n开始可视化指定的点云案例...")
+
+        database_set = self.database_sets[0]
+
+        # 指定要可视化的索引（第13个点云对应索引12）
+        target_indices = [12]  # 可以添加更多索引，如 [12, 15, 20]
+        sample_keys = [list(database_set.keys())[i] for i in target_indices if i < len(database_set)]
+
+        for i, key in enumerate(sample_keys):
+            item = database_set[key]
+            filename = item['query']
+
+            print(f"正在可视化指定案例 {i + 1}: 索引{key}, 文件{filename}")
+
+            # 加载点云
+            pointcloud = self.load_chilean_pointcloud(filename)
+            if len(pointcloud) == 0:
+                print(f"跳过: 无法加载点云 {filename}")
+                continue
+
+            # 创建轮廓管理器
+            cm = ContourManager(self.cm_config, key)
+            str_id = f"specified_sample_{key}"
+            cm.make_bev(pointcloud, str_id)
+            cm.make_contours_recursive()
+
+            # 可视化
+            prefix = f"specified_sample_index_{key}"
+            self.visualizer.visualize_pointcloud_pipeline(cm, pointcloud, prefix)
+
+    def visualize_failure_cases(self):
+        """可视化失败案例"""
+
+        # 从失败日志中提取的失败案例ID
+        failure_cases = [3, 6, 28, 49, 51]  # 之前分析出的失败案例
+
+        print(f"\n开始可视化 {len(failure_cases)} 个失败案例...")
+
+        query_set = self.query_sets[0]
+
+        for i, query_key in enumerate(failure_cases):
+            if query_key not in query_set:
+                continue
+
+            item = query_set[query_key]
+            filename = item['query']
+
+            print(f"正在可视化失败案例 {i + 1}/{len(failure_cases)}: {filename}")
+
+            # 加载点云
+            pointcloud = self.load_chilean_pointcloud(filename)
+            if len(pointcloud) == 0:
+                continue
+
+            # 创建轮廓管理器
+            cm = ContourManager(self.cm_config, query_key + 10000)
+            str_id = f"failure_case_{query_key}"
+            cm.make_bev(pointcloud, str_id)
+            cm.make_contours_recursive()
+
+            # 可视化
+            prefix = f"failure_case_{i + 1}_{query_key}"
+            self.visualizer.visualize_pointcloud_pipeline(cm, pointcloud, prefix)
+
+# ========== 添加可视化函数类 ==========
+class ContourVisualizer:
+    """轮廓上下文可视化器 - 改进版本"""
+
+    def __init__(self, output_dir: str = "visualization_output"):
+        self.output_dir = output_dir
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+    def visualize_pointcloud_pipeline(self, cm: ContourManager, pointcloud: np.ndarray,
+                                      filename_prefix: str):
+        """可视化单个点云的完整处理流程 - 改进版本"""
+
+        # 1. 原始点云 3D散点图
+        fig1 = plt.figure(figsize=(12, 8))
+        ax1 = fig1.add_subplot(111, projection='3d')
+        self._plot_3d_pointcloud(ax1, pointcloud, title="Original Point Cloud 3D")
+        plt.tight_layout()
+        output_path_3d = os.path.join(self.output_dir, f"{filename_prefix}_01_3d_pointcloud.png")
+        plt.savefig(output_path_3d, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"3D point cloud saved to: {output_path_3d}")
+
+        # 2. 每层BEV和该层椭圆图 - 分别保存
+        lv_grads = cm.get_config().lv_grads
+        num_levels = len(lv_grads) - 1
+
+        for level in range(num_levels):
+            self._plot_layered_bev_with_ellipses(cm, level, filename_prefix)
+
+        # 3. 3D椭圆总览
+        self._plot_3d_ellipses_overview(cm, filename_prefix)
+
+        # 4. 3D BCI星座总览
+        self._plot_3d_bci_constellation_overview(cm, filename_prefix)
+
+        # 5. 单个BCI的详细星座图
+        self._plot_single_bci_constellation(cm, filename_prefix)
+
+        # 6. 特征键热力图
+        fig_heatmap = plt.figure(figsize=(14, 8))
+        ax_heatmap = fig_heatmap.add_subplot(111)
+        self._plot_feature_keys_heatmap(ax_heatmap, cm, title="Feature Key Heatmap")
+        plt.tight_layout()
+        output_path_heatmap = os.path.join(self.output_dir, f"{filename_prefix}_06_feature_heatmap.png")
+        plt.savefig(output_path_heatmap, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Feature heatmap saved to: {output_path_heatmap}")
+
+        print(f"All visualizations for {filename_prefix} completed!")
+
+    def _plot_layered_bev_with_ellipses(self, cm: ContourManager, level: int, filename_prefix: str):
+        """在每层BEV图中显示该层的椭圆"""
+        fig = plt.figure(figsize=(12, 10))
+        ax = fig.add_subplot(111)
+
+        # 获取BEV图像和轮廓
+        bev_image = cm.get_contour_image(level)
+        contours_level = cm.get_lev_contours(level)
+
+        # 显示BEV二值图
+        ax.imshow(bev_image, cmap='gray', origin='lower', alpha=0.8)
+
+        colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'cyan']
+
+        # 绘制该层的轮廓和椭圆
+        ellipse_count = 0
+        for seq, contour in enumerate(contours_level[:8]):  # 显示前8个
+            color = colors[seq % len(colors)]
+            pos_mean = contour.pos_mean
+            cell_cnt = contour.cell_cnt
+
+            # 绘制质心
+            ax.plot(pos_mean[1], pos_mean[0], 'o', color=color,
+                    markersize=12, markeredgecolor='black', markeredgewidth=2)
+
+            # 绘制协方差椭圆
+            if hasattr(contour, 'eig_vals') and hasattr(contour, 'eig_vecs'):
+                self._draw_covariance_ellipse(ax, pos_mean, contour.eig_vals,
+                                              contour.eig_vecs, color, alpha=0.6)
+
+                # 绘制主轴方向
+                main_axis = contour.eig_vecs[:, 1] * np.sqrt(contour.eig_vals[1]) * 3
+                ax.arrow(pos_mean[1], pos_mean[0], main_axis[1], main_axis[0],
+                         head_width=4, head_length=3, fc=color, ec='black', alpha=0.8, linewidth=2)
+
+                ellipse_count += 1
+
+            # 标注
+            ax.text(pos_mean[1] + 8, pos_mean[0] + 8, f'S{seq}\n({cell_cnt})',
+                    color='black', fontsize=10, weight='bold',
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor=color, alpha=0.8))
+
+        # 设置标题和标签
+        lv_grads = cm.get_config().lv_grads
+        h_min = lv_grads[level]
+        h_max = lv_grads[level + 1]
+        title = f'L{level}: Height [{h_min:.1f}m, {h_max:.1f}m) - {len(contours_level)} contours, {ellipse_count} ellipses'
+        ax.set_title(title, fontsize=14, weight='bold')
+
+        # 坐标轴设置
+        config = cm.get_config()
+        x_center = config.n_col // 2
+        y_center = config.n_row // 2
+        meter_range = 10
+        grid_range = int(meter_range / config.reso_col)
+
+        ax.set_xlim(x_center - grid_range, x_center + grid_range)
+        ax.set_ylim(y_center - grid_range, y_center + grid_range)
+
+        # 米制标签
+        x_ticks = np.linspace(x_center - grid_range, x_center + grid_range, 5)
+        y_ticks = np.linspace(y_center - grid_range, y_center + grid_range, 5)
+        x_labels = [f'{(x - x_center) * config.reso_col:.1f}' for x in x_ticks]
+        y_labels = [f'{(y - y_center) * config.reso_row:.1f}' for y in y_ticks]
+
+        ax.set_xticks(x_ticks)
+        ax.set_yticks(y_ticks)
+        ax.set_xticklabels(x_labels)
+        ax.set_yticklabels(y_labels)
+        ax.set_xlabel('X (m)', fontsize=12)
+        ax.set_ylabel('Y (m)', fontsize=12)
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect('equal')
+
+        plt.tight_layout()
+        output_path = os.path.join(self.output_dir, f"{filename_prefix}_02_L{level}_bev_ellipses.png")
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Level {level} BEV with ellipses saved to: {output_path}")
+
+    def _plot_3d_ellipses_overview(self, cm: ContourManager, filename_prefix: str):
+        """3D椭圆总览"""
+        fig = plt.figure(figsize=(14, 10))
+        ax = fig.add_subplot(111, projection='3d')
+
+        lv_grads = cm.get_config().lv_grads
+        num_levels = len(lv_grads) - 1
+        config = cm.get_config()
+
+        # 层级颜色
+        colors = plt.cm.Set1(np.linspace(0, 1, num_levels))
+
+        total_ellipses = 0
+
+        for level in range(num_levels):
+            contours_level = cm.get_lev_contours(level)
+            color = colors[level]
+
+            # 计算层级的Z坐标（使用区间中点）
+            z_coord = (lv_grads[level] + lv_grads[level + 1]) / 2
+
+            for seq, contour in enumerate(contours_level):  # 每层最多显示5个
+                pos_mean = contour.pos_mean
+
+                # 转换到米制坐标
+                x_meter = (pos_mean[1] - config.n_col // 2) * config.reso_col
+                y_meter = (pos_mean[0] - config.n_row // 2) * config.reso_row
+
+                # 绘制质心点
+                ax.scatter(x_meter, y_meter, z_coord,
+                           c=[color], s=15, alpha=1.0, edgecolors='black')
+
+                # 绘制3D椭圆投影（在对应高度平面上）
+                if hasattr(contour, 'eig_vals') and hasattr(contour, 'eig_vecs'):
+                    self._draw_3d_ellipse_projection(ax, x_meter, y_meter, z_coord,
+                                                     contour.eig_vals, contour.eig_vecs,
+                                                     color, config.reso_col)
+
+                # 添加标签
+                ax.text(x_meter + 0.5, y_meter + 0.5, z_coord + 0.1,
+                        f'L{level}S{seq}', fontsize=6)
+
+                total_ellipses += 1
+
+        ax.set_xlabel('X (m)', fontsize=12)
+        ax.set_ylabel('Y (m)', fontsize=12)
+        ax.set_zlabel('Height (m)', fontsize=12)
+        ax.set_title(f'3D Contour Ellipses Overview ({total_ellipses} ellipses)', fontsize=14, weight='bold')
+
+        # 设置视角
+        ax.view_init(elev=20, azim=45)
+
+        # 设置坐标范围
+        ax.set_xlim(-10, 10)
+        ax.set_ylim(-10, 10)
+        ax.set_zlim(lv_grads[0], lv_grads[-1])
+
+        plt.tight_layout()
+        output_path = os.path.join(self.output_dir, f"{filename_prefix}_03_3d_ellipses_overview.png")
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"3D ellipses overview saved to: {output_path}")
+
+    def _plot_3d_bci_constellation_overview(self, cm: ContourManager, filename_prefix: str):
+        """3D BCI星座总览"""
+        fig = plt.figure(figsize=(14, 10))
+        ax = fig.add_subplot(111, projection='3d')
+
+        lv_grads = cm.get_config().lv_grads
+        num_levels = len(lv_grads) - 1
+        config = cm.get_config()
+
+        # 层级颜色
+        colors = plt.cm.tab10(np.linspace(0, 1, num_levels))
+
+        total_connections = 0
+
+        for level in range(num_levels):
+            bcis = cm.get_lev_bci(level)
+            contours_level = cm.get_lev_contours(level)
+
+            for seq, bci in enumerate(bcis[:1]):  # 每层最多显示1个BCI
+                if seq >= len(contours_level):
+                    continue
+
+                pivot_contour = contours_level[bci.piv_seq] if bci.piv_seq < len(contours_level) else None
+                if pivot_contour is None:
+                    continue
+
+                # 中心点坐标
+                pivot_pos = pivot_contour.pos_mean
+                pivot_x = (pivot_pos[1] - config.n_col // 2) * config.reso_col
+                pivot_y = (pivot_pos[0] - config.n_row // 2) * config.reso_row
+                pivot_z = (lv_grads[level] + lv_grads[level + 1]) / 2
+
+                # 绘制中心点
+                ax.scatter(pivot_x, pivot_y, pivot_z,
+                           c=[colors[level]], s=150, alpha=0.9,
+                           edgecolors='black', linewidth=2, marker='o')
+
+                # 绘制邻居连接
+                for nei_pt in bci.nei_pts:  # 最多显示10个邻居
+                    nei_level = nei_pt.level
+                    nei_seq = nei_pt.seq
+
+                    if nei_level >= num_levels:
+                        continue
+
+                    nei_contours = cm.get_lev_contours(nei_level)
+                    if nei_seq >= len(nei_contours):
+                        continue
+
+                    nei_contour = nei_contours[nei_seq]
+                    nei_pos = nei_contour.pos_mean
+
+                    nei_x = (nei_pos[1] - config.n_col // 2) * config.reso_col
+                    nei_y = (nei_pos[0] - config.n_row // 2) * config.reso_row
+                    nei_z = (lv_grads[nei_level] + lv_grads[nei_level + 1]) / 2
+
+                    # 绘制邻居点
+                    ax.scatter(nei_x, nei_y, nei_z,
+                               c=[colors[nei_level]], s=50, alpha=0.7, marker='s')
+
+                    # 绘制连接线
+                    ax.plot([pivot_x, nei_x], [pivot_y, nei_y], [pivot_z, nei_z],
+                            color=colors[level], alpha=0.5, linewidth=1)
+
+                    total_connections += 1
+
+                # 添加标签
+                ax.text(pivot_x + 0.5, pivot_y + 0.5, pivot_z + 0.2,
+                        f'L{level}S{seq}', fontsize=9, weight='bold')
+
+        ax.set_xlabel('X (m)', fontsize=12)
+        ax.set_ylabel('Y (m)', fontsize=12)
+        ax.set_zlabel('Height (m)', fontsize=12)
+        ax.set_title(f'3D BCI Constellation Overview ({total_connections} connections)',
+                     fontsize=14, weight='bold')
+
+        # 设置视角
+        ax.view_init(elev=25, azim=60)
+
+        # 设置坐标范围
+        ax.set_xlim(-10, 10)
+        ax.set_ylim(-10, 10)
+        ax.set_zlim(lv_grads[0], lv_grads[-1])
+
+        plt.tight_layout()
+        output_path = os.path.join(self.output_dir, f"{filename_prefix}_04_3d_bci_overview.png")
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"3D BCI constellation overview saved to: {output_path}")
+
+    def _plot_single_bci_constellation(self, cm: ContourManager, filename_prefix: str):
+        """单个BCI的详细星座图"""
+        # 选择一个有较多邻居的BCI进行详细可视化
+        selected_bci = None
+        selected_level = -1
+        selected_seq = -1
+        max_neighbors = 0
+
+        lv_grads = cm.get_config().lv_grads
+        num_levels = len(lv_grads) - 1
+
+        # 找到邻居最多的BCI
+        for level in range(num_levels):
+            bcis = cm.get_lev_bci(level)
+            for seq, bci in enumerate(bcis):
+                if len(bci.nei_pts) > max_neighbors:
+                    max_neighbors = len(bci.nei_pts)
+                    selected_bci = bci
+                    selected_level = level
+                    selected_seq = seq
+
+        if selected_bci is None or max_neighbors == 0:
+            print(f"No BCI with neighbors found for detailed visualization")
+            return
+
+        fig = plt.figure(figsize=(14, 10))
+        ax = fig.add_subplot(111, projection='3d')
+
+        config = cm.get_config()
+        contours_level = cm.get_lev_contours(selected_level)
+
+        if selected_bci.piv_seq >= len(contours_level):
+            print(f"Invalid pivot sequence {selected_bci.piv_seq} for level {selected_level}")
+            return
+
+        pivot_contour = contours_level[selected_bci.piv_seq]
+
+        # 中心点坐标
+        pivot_pos = pivot_contour.pos_mean
+        pivot_x = (pivot_pos[1] - config.n_col // 2) * config.reso_col
+        pivot_y = (pivot_pos[0] - config.n_row // 2) * config.reso_row
+        pivot_z = (lv_grads[selected_level] + lv_grads[selected_level + 1]) / 2
+
+        # 绘制中心椭圆
+        if hasattr(pivot_contour, 'eig_vals') and hasattr(pivot_contour, 'eig_vecs'):
+            self._draw_3d_ellipse_projection(ax, pivot_x, pivot_y, pivot_z,
+                                             pivot_contour.eig_vals, pivot_contour.eig_vecs,
+                                             'red', config.reso_col, alpha=0.8)
+
+        # 绘制中心点
+        ax.scatter(pivot_x, pivot_y, pivot_z,
+                   c='red', s=100, alpha=1.0,
+                   edgecolors='black', linewidth=2, marker='o')
+
+        # 层级颜色
+        colors = plt.cm.tab10(np.linspace(0, 1, num_levels))
+
+        # 绘制所有邻居
+        for i, nei_pt in enumerate(selected_bci.nei_pts):
+            nei_level = nei_pt.level
+            nei_seq = nei_pt.seq
+
+            if nei_level >= num_levels:
+                continue
+
+            nei_contours = cm.get_lev_contours(nei_level)
+            if nei_seq >= len(nei_contours):
+                continue
+
+            nei_contour = nei_contours[nei_seq]
+            nei_pos = nei_contour.pos_mean
+
+            nei_x = (nei_pos[1] - config.n_col // 2) * config.reso_col
+            nei_y = (nei_pos[0] - config.n_row // 2) * config.reso_row
+            nei_z = (lv_grads[nei_level] + lv_grads[nei_level + 1]) / 2
+
+            # 绘制邻居椭圆
+            if hasattr(nei_contour, 'eig_vals') and hasattr(nei_contour, 'eig_vecs'):
+                self._draw_3d_ellipse_projection(ax, nei_x, nei_y, nei_z,
+                                                 nei_contour.eig_vals, nei_contour.eig_vecs,
+                                                 colors[nei_level], config.reso_col, alpha=0.6)
+
+            # 绘制邻居点
+            ax.scatter(nei_x, nei_y, nei_z,
+                       c=[colors[nei_level]], s=20, alpha=1.0, marker='s')
+
+            # 绘制连接线，线宽根据距离调整
+            line_width = max(1, 3 - nei_pt.r / 5)  # 距离越近线越粗
+            ax.plot([pivot_x, nei_x], [pivot_y, nei_y], [pivot_z, nei_z],
+                    color=colors[nei_level], alpha=0.7, linewidth=line_width)
+
+            # 添加距离和角度标签
+            mid_x = (pivot_x + nei_x) / 2
+            mid_y = (pivot_y + nei_y) / 2
+            mid_z = (pivot_z + nei_z) / 2
+
+            if i < 10:  # 只标注前10个邻居，避免过于拥挤
+                ax.text(mid_x, mid_y, mid_z,
+                        f'r={nei_pt.r:.1f}\nθ={nei_pt.theta * 180 / np.pi:.0f}°',
+                        fontsize=7, alpha=0.8)
+
+            # 邻居标签
+            ax.text(nei_x + 0.3, nei_y + 0.3, nei_z + 0.1,
+                    f'L{nei_level}S{nei_seq}', fontsize=8)
+
+        # 中心点标签
+        ax.text(pivot_x + 0.5, pivot_y + 0.5, pivot_z + 0.3,
+                f'CENTER\nL{selected_level}S{selected_seq}',
+                fontsize=10, weight='bold', color='red')
+
+        ax.set_xlabel('X (m)', fontsize=12)
+        ax.set_ylabel('Y (m)', fontsize=12)
+        ax.set_zlabel('Height (m)', fontsize=12)
+        ax.set_title(f'Detailed BCI Constellation: L{selected_level}S{selected_seq} '
+                     f'({len(selected_bci.nei_pts)} neighbors)',
+                     fontsize=14, weight='bold')
+
+        # 设置视角
+        ax.view_init(elev=20, azim=45)
+
+        # 动态设置坐标范围
+        all_x = [pivot_x] + [nei_x for nei_x in [pivot_x]]  # 简化版本，实际应收集所有点
+        all_y = [pivot_y] + [nei_y for nei_y in [pivot_y]]
+
+        range_x = max(15, (max(all_x) - min(all_x)) * 1.2) if len(all_x) > 1 else 15
+        range_y = max(15, (max(all_y) - min(all_y)) * 1.2) if len(all_y) > 1 else 15
+
+        ax.set_xlim(pivot_x - range_x / 2, pivot_x + range_x / 2)
+        ax.set_ylim(pivot_y - range_y / 2, pivot_y + range_y / 2)
+        ax.set_zlim(lv_grads[0], lv_grads[-1])
+
+        plt.tight_layout()
+        output_path = os.path.join(self.output_dir, f"{filename_prefix}_05_detailed_bci_constellation.png")
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Detailed BCI constellation saved to: {output_path}")
+
+    def _draw_3d_ellipse_projection(self, ax, center_x, center_y, center_z,
+                                    eig_vals, eig_vecs, color, resolution, alpha=0.6):
+        """在3D空间中绘制椭圆投影"""
+        # 创建椭圆参数
+        theta = np.linspace(0, 2 * np.pi, 50)
+
+        # 椭圆在标准坐标系中的点
+        ellipse_x = np.sqrt(eig_vals[1]) * np.cos(theta) * resolution
+        ellipse_y = np.sqrt(eig_vals[0]) * np.sin(theta) * resolution
+
+        # 旋转椭圆
+        cos_angle = eig_vecs[1, 1]  # 主轴方向
+        sin_angle = eig_vecs[0, 1]
+
+        rotated_x = cos_angle * ellipse_x - sin_angle * ellipse_y
+        rotated_y = sin_angle * ellipse_x + cos_angle * ellipse_y
+
+        # 平移到中心位置
+        final_x = rotated_x + center_x
+        final_y = rotated_y + center_y
+        final_z = np.full_like(final_x, center_z)
+
+        # 绘制椭圆
+        ax.plot(final_x, final_y, final_z, color=color, alpha=alpha, linewidth=2)
+
+    def _draw_covariance_ellipse(self, ax, center, eig_vals, eig_vecs, color, alpha=0.3):
+        """绘制协方差椭圆 (2D版本)"""
+        from matplotlib.patches import Ellipse
+
+        # 计算椭圆参数
+        angle = np.degrees(np.arctan2(eig_vecs[1, 1], eig_vecs[0, 1]))
+        width = 2 * np.sqrt(eig_vals[1]) * 2  # 2 standard deviations
+        height = 2 * np.sqrt(eig_vals[0]) * 2
+
+        # 创建椭圆
+        ellipse = Ellipse((center[1], center[0]), width, height,
+                          angle=angle, facecolor=color, alpha=alpha,
+                          edgecolor='black', linewidth=1)
+        ax.add_patch(ellipse)
+
+    def _plot_3d_pointcloud(self, ax, pointcloud: np.ndarray, title: str):
+        """绘制3D点云"""
+        # 采样以提高显示性能
+        if len(pointcloud) > 15000:
+            indices = np.random.choice(len(pointcloud), 15000, replace=False)
+            sample_cloud = pointcloud[indices]
+        else:
+            sample_cloud = pointcloud
+
+        # 按z值着色
+        colors = sample_cloud[:, 2]
+        scatter = ax.scatter(sample_cloud[:, 0], sample_cloud[:, 1], sample_cloud[:, 2],
+                             c=colors, s=1.0, alpha=0.7, cmap='viridis')
+
+        ax.set_xlabel('X (m)', fontsize=12)
+        ax.set_ylabel('Y (m)', fontsize=12)
+        ax.set_zlabel('Z (m)', fontsize=12)
+        ax.set_title(title, fontsize=14, weight='bold')
+
+        # 设置合理的轴范围
+        ax.set_xlim(-10, 10)
+        ax.set_ylim(-10, 10)
+        ax.set_zlim(-5, 5)
+
+        # 添加颜色条
+        plt.colorbar(scatter, ax=ax, shrink=0.6, aspect=30, label='Height (m)')
+
+        # 添加统计信息
+        ax.text2D(0.02, 0.98, f'Points: {len(sample_cloud):,}\nZ range: [{colors.min():.2f}, {colors.max():.2f}]m',
+                  transform=ax.transAxes, verticalalignment='top', fontsize=10,
+                  bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+
+    def _plot_feature_keys_heatmap(self, ax, cm: ContourManager, title: str):
+        """绘制特征键热力图"""
+        lv_grads = cm.get_config().lv_grads
+        n_levels = len(lv_grads) - 1
+        n_seqs = 8
+
+        # 收集所有特征键
+        feature_matrix = np.zeros((n_levels, n_seqs))
+
+        for level in range(n_levels):
+            keys = cm.get_lev_retrieval_key(level)
+            for seq in range(min(len(keys), n_seqs)):
+                key_sum = np.sum(keys[seq])
+                feature_matrix[level, seq] = key_sum
+
+        # 绘制热力图
+        im = ax.imshow(feature_matrix, cmap='RdYlBu_r', aspect='auto', origin='lower')
+
+        # 添加数值标注
+        for level in range(n_levels):
+            for seq in range(n_seqs):
+                value = feature_matrix[level, seq]
+                color = 'white' if value > np.max(feature_matrix) * 0.5 else 'black'
+                ax.text(seq, level, f'{value:.0f}' if value > 0 else '0',
+                        ha='center', va='center', color=color, fontsize=12, weight='bold')
+
+        # 设置标签
+        ax.set_xlabel('Sequence Index (S0-S7)', fontsize=12)
+        ax.set_ylabel('Level Index (L0-L7)', fontsize=12)
+
+        valid_keys = np.sum(feature_matrix > 0)
+        zero_keys = np.sum(feature_matrix == 0)
+        ax.set_title(f'{title}\nValid Keys: {valid_keys}, Zero Keys: {zero_keys}',
+                     fontsize=14, weight='bold')
+
+        # 设置刻度
+        ax.set_xticks(range(n_seqs))
+        ax.set_xticklabels([f'S{i}' for i in range(n_seqs)])
+        ax.set_yticks(range(n_levels))
+
+        # 正确的区间标签
+        interval_labels = []
+        for i in range(n_levels):
+            h_min = lv_grads[i]
+            h_max = lv_grads[i + 1]
+            interval_labels.append(f'L{i}\n[{h_min:.1f},{h_max:.1f})')
+
+        ax.set_yticklabels(interval_labels)
+
+        # 添加颜色条
+        cbar = plt.colorbar(im, ax=ax, label='Feature Key Value')
+        cbar.ax.tick_params(labelsize=10)
+
+        # 添加统计信息
+        max_value = np.max(feature_matrix)
+        mean_nonzero = np.mean(feature_matrix[feature_matrix > 0]) if valid_keys > 0 else 0
+
+        stats_text = f'Max Value: {max_value:.0f}\nMean (non-zero): {mean_nonzero:.1f}\nSparsity: {zero_keys}/{n_levels * n_seqs} ({100 * zero_keys / (n_levels * n_seqs):.1f}%)'
+        ax.text(1.02, 0.5, stats_text, transform=ax.transAxes, verticalalignment='center',
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="lightyellow", alpha=0.9),
+                fontsize=10)
+
 
 def main():
     """主函数"""
@@ -627,7 +1445,7 @@ def main():
     DATASET_FOLDER = '/home/wzj/pan2/Chilean_Underground_Mine_Dataset_Many_Times'  # 修改为你的Chilean数据集路径
     DATABASE_FILE = 'chilean_NoRot_NoScale_5cm_evaluation_database_100_100.pickle'  # 数据库pickle文件
     QUERY_FILE = 'chilean_NoRot_NoScale_5cm_evaluation_query_180_180.pickle'  # 查询pickle文件
-    LOG_FILE = 'contour_chilean_不同时段_log.txt'  # 日志文件
+    LOG_FILE = 'contour_chilean_不相同时段_log.txt'  # 日志文件
     # =====================================================
 
     # 如果仍然希望支持命令行参数，可以取消注释以下代码
@@ -678,13 +1496,28 @@ def main():
     print(f"当前工作目录: {os.getcwd()}")
     print("-" * 60)
 
-    # 创建评估器并运行评估
+    # 创建评估器
     evaluator = ChileanContourEvaluator(
         dataset_folder=dataset_folder,
         database_file=database_file,
         query_file=query_file,
         log_file=log_file
     )
+
+    # ✅ 添加：执行可视化（在评估之前）
+    print("=" * 60)
+    print("开始可视化分析...")
+    print("=" * 60)
+
+    # 可视化（现在会显示区间信息）
+    evaluator.visualize_sample_cases()  # 先测试一个
+
+    # 可视化失败案例
+    #evaluator.visualize_failure_cases()
+
+    print("=" * 60)
+    print("可视化完成，开始正常评估...")
+    print("=" * 60)
 
     # 执行评估
     start_time = time.time()
