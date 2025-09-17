@@ -19,7 +19,7 @@ from contour_types import (
     ContourManagerConfig, ContourDBConfig, CandidateScoreEnsemble,
     ContourSimThresConfig, TreeBucketConfig
 )
-from contour_manager import ContourManager
+from contour_manager_区间分割_垂直结构复杂度 import ContourManager
 from contour_database import ContourDB
 
 
