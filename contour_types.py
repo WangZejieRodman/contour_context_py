@@ -11,8 +11,11 @@ import yaml
 
 # 常量定义
 BITS_PER_LAYER = 20
-DIST_BIN_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7]  # 用于生成距离键和形成星座的层
-LAYER_AREA_WEIGHTS = [0.3, 0.3, 0.3, 0.1]  # 计算归一化"使用区域百分比"时每层的权重
+DIST_BIN_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 用于生成距离键和形成星座的层
+LAYER_AREA_WEIGHTS = [0.05, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.1, 0.1]  # 计算归一化"使用区域百分比"时每层的权重
+# BITS_PER_LAYER = 20
+# DIST_BIN_LAYERS = [0, 1, 2, 3, 4]  # 用于生成距离键和形成星座的层
+# LAYER_AREA_WEIGHTS = [0.1, 0.2, 0.3, 0.2, 0.2]  # 计算归一化"使用区
 NUM_BIN_KEY_LAYER = len(DIST_BIN_LAYERS)
 RET_KEY_DIM = 10  # 检索键维度
 
@@ -20,7 +23,7 @@ RET_KEY_DIM = 10  # 检索键维度
 class ContourViewStatConfig:
     """轮廓视图统计配置"""
     min_cell_cov: int = 4
-    point_sigma: float = 1.0
+    point_sigma: float = 0.01
     com_bias_thres: float = 0.5
 
 @dataclass
