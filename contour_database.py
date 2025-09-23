@@ -1160,6 +1160,20 @@ class ContourDB:
             print(f"After check 2: {cand_mng.cand_aft_check2}")
             print(f"After check 3: {cand_mng.cand_aft_check3}")
 
+            # ===== 新增：详细相似性检查统计 =====
+            total_queries = 1000  # 可以根据实际情况调整
+            if total_queries > 0:
+                check1_pass_rate = cand_mng.cand_aft_check1 / total_queries
+                print(f"Similarity check pass rates: check1={check1_pass_rate:.4f}")
+
+                if cand_mng.cand_aft_check1 > 0:
+                    check2_pass_rate = cand_mng.cand_aft_check2 / cand_mng.cand_aft_check1
+                    print(f"Constellation similarity pass rate: {check2_pass_rate:.4f}")
+
+                if cand_mng.cand_aft_check2 > 0:
+                    check3_pass_rate = cand_mng.cand_aft_check3 / cand_mng.cand_aft_check2
+                    print(f"Pairwise similarity pass rate: {check3_pass_rate:.4f}")
+
         return cand_ptrs, cand_corr, cand_tf
 
     def add_scan(self, added: ContourManager, curr_timestamp: float):
