@@ -99,7 +99,7 @@ class ChileanContourEvaluator:
 
         config.nnk = 30  # 降低KNN搜索数量以提高召回率
         config.max_fine_opt = 5  # 减少精细优化候选数
-        config.q_levels = [1, 2, 3, 4]  # 使用更多层级
+        config.q_levels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
         # 树桶配置
         tb_cfg = TreeBucketConfig()
