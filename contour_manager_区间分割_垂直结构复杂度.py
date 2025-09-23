@@ -199,6 +199,8 @@ class ContourManager:
                     perc = 0.0
                 self.cont_perc[ll].append(perc)
 
+        # ===== 新增：输出详细轮廓统计信息 =====
+        self._output_detailed_contour_statistics()
         # 生成检索键
         self._make_retrieval_keys()
 
@@ -300,7 +302,7 @@ class ContourManager:
         """生成检索键"""
         roi_radius_padded = int(np.ceil(self.cfg.roi_radius + 1))
 
-        for ll in range(len(self.cfg.lv_grads)):
+        for ll in range(len(self.cfg.lv_grads)-1):
             accumulate_cell_cnt = 0
 
             for seq in range(self.cfg.piv_firsts):
@@ -328,8 +330,16 @@ class ContourManager:
                     # 生成二进制星座标识
                     self._generate_bci(bci, ll, seq, v_cen)
 
-                self.layer_key_bcis[ll].append(bci)
-                self.layer_keys[ll].append(key)
+                self.layer_key_bcis[ll].append(bci) #bci：邻居（相关）轮廓信息，包含dist_bin(二进制位串记录邻居距离分布)、nei_pts(邻居轮廓的详细信息列表)、nei_idx_segs(按距离分组的索引段)、piv_seq(中心轮廓序号)、level(所属层级)。
+                self.layer_keys[ll].append(key) #key：当前轮廓信息，10维特征：[最大特征值×像素数, 最小特征值×像素数, 累积像素数平方根, 10-3个环形分布bins]
+            print(f"第{ll}层-全部轮廓的key和bci已生成")
+
+        print(f"全部层-全部轮廓的key和bci已生成")
+
+        # ===== 输出检索键统计信息 =====
+        self._output_retrieval_key_statistics()
+        # ===== BCI统计输出 =====
+        self._output_bci_statistics()
 
     def _generate_ring_features(self, v_cen: np.ndarray, r_min: int, r_max: int,
                                 c_min: int, c_max: int, accumulate_cell_cnt: int,
@@ -407,9 +417,9 @@ class ContourManager:
 
     def _generate_bci(self, bci: BCI, ll: int, seq: int, v_cen: np.ndarray):
         """生成二进制星座标识"""
-        for bl in range(NUM_BIN_KEY_LAYER):
-            bit_offset = bl * BITS_PER_LAYER
-            layer_idx = DIST_BIN_LAYERS[bl]
+        for bl in range(NUM_BIN_KEY_LAYER):  # 遍历不同的距离层级
+            bit_offset = bl * BITS_PER_LAYER  # 每层20个bits
+            layer_idx = DIST_BIN_LAYERS[bl]  # 对应的高度层级
 
             # 添加边界检查
             if layer_idx >= len(self.cont_views):
@@ -417,7 +427,7 @@ class ContourManager:
                 continue
 
             for j in range(min(self.cfg.dist_firsts, len(self.cont_views[layer_idx]))):
-                if ll != layer_idx or j != seq:
+                if ll != layer_idx or j != seq:# 排除自身轮廓，在同层不同轮廓和不同层不同轮廓里筛选
                     # 计算相对位置
                     vec_cc = self.cont_views[layer_idx][j].pos_mean - v_cen
                     tmp_dist = np.linalg.norm(vec_cc)
@@ -446,6 +456,8 @@ class ContourManager:
                 if bci.nei_pts[bci.nei_idx_segs[-1]].bit_pos != bci.nei_pts[p1].bit_pos:
                     bci.nei_idx_segs.append(p1)
             bci.nei_idx_segs.append(len(bci.nei_pts))
+
+        print(f"第{ll}层-第{seq}个轮廓的bci已生成")
 
     # Getter方法
     def get_lev_retrieval_key(self, level: int) -> List[np.ndarray]:
@@ -493,28 +505,22 @@ class ContourManager:
         return self.bev.copy()
 
     def get_contour_image(self, level: int) -> np.ndarray:
-        """获取指定层级的轮廓图像 - 修改为区间模式"""
+        """获取指定层级的轮廓图像 - 修复区间模式"""
         if self.bev is None:
             return np.zeros((self.cfg.n_row, self.cfg.n_col), dtype=np.uint8)
 
         lv_grads = self.cfg.lv_grads
 
-        # 确定区间范围
-        if level == 0:
-            h_min = self.min_bin_val
-            h_max = lv_grads[0]
-        elif level == len(lv_grads) - 1:
-            h_min = lv_grads[level - 1] if level > 0 else lv_grads[level]
-            h_max = float('inf')
-        else:
-            h_min = lv_grads[level - 1] if level > 0 else self.min_bin_val
-            h_max = lv_grads[level]
-
-        # 创建区间掩码
-        if h_max == float('inf'):
-            mask = (self.bev >= h_min).astype(np.uint8) * 255
-        else:
+        # ✅ 修复：使用与轮廓提取完全相同的区间定义
+        if level < len(lv_grads) - 1:
+            h_min = lv_grads[level]  # L3: 1.5
+            h_max = lv_grads[level + 1]  # L3: 2.0
+            # 创建区间掩码：[h_min, h_max)
             mask = ((self.bev >= h_min) & (self.bev < h_max)).astype(np.uint8) * 255
+        else:
+            # 最后一层：[lv_grads[level], +∞)
+            h_min = lv_grads[level]
+            mask = (self.bev >= h_min).astype(np.uint8) * 255
 
         return mask
 
@@ -650,6 +656,154 @@ class ContourManager:
         T_delta = umeyama_2d(pointset1, pointset2)
 
         return T_delta
+
+    def _output_detailed_contour_statistics(self):
+        """输出详细的轮廓统计信息到日志"""
+        try:
+            contour_sizes = []
+            eccentricities = []
+            eigenvalue_ratios = []
+            significant_ecc_count = 0
+            significant_com_count = 0
+            heights = []
+
+            # 收集所有轮廓的统计信息
+            for level in range(len(self.cont_views)):
+                for contour in self.cont_views[level]:
+                    # 轮廓尺寸
+                    contour_sizes.append(contour.cell_cnt)
+
+                    # 偏心率
+                    eccentricities.append(contour.eccen)
+
+                    # 特征值比例
+                    if len(contour.eig_vals) == 2 and contour.eig_vals[1] > 0:
+                        ratio = contour.eig_vals[0] / contour.eig_vals[1]
+                        eigenvalue_ratios.append(ratio)
+
+                    # 显著特征计数
+                    if contour.ecc_feat:
+                        significant_ecc_count += 1
+                    if contour.com_feat:
+                        significant_com_count += 1
+
+                    # 高度信息
+                    heights.append(contour.vol3_mean)
+
+            # 输出到日志
+            if contour_sizes:
+                print(f"Contour sizes: {','.join(map(str, contour_sizes))}")
+                print(f"Eccentricities: {','.join([f'{x:.3f}' for x in eccentricities])}")
+                if eigenvalue_ratios:
+                    print(f"Eigenvalue ratios: {','.join([f'{x:.3f}' for x in eigenvalue_ratios])}")
+                print(
+                    f"Significant features: ecc={significant_ecc_count}, com={significant_com_count}, total={len(contour_sizes)}")
+                if heights:
+                    print(f"Contour heights: {','.join([f'{x:.2f}' for x in heights])}")
+
+        except Exception as e:
+            print(f"轮廓统计输出失败: {e}")
+
+    def _output_retrieval_key_statistics(self):
+        """输出检索键特征统计信息到日志"""
+        try:
+            key_stats = {'dim0': [], 'dim1': [], 'dim2': [], 'zero_keys': 0}
+            ring_activations = []
+            total_keys = 0
+
+            # 收集所有层级的检索键信息
+            for ll in range(len(self.layer_keys)):
+                for key in self.layer_keys[ll]:
+                    total_keys += 1
+
+                    if len(key) >= 3:
+                        key_stats['dim0'].append(float(key[0]))
+                        key_stats['dim1'].append(float(key[1]))
+                        key_stats['dim2'].append(float(key[2]))
+
+                        # 检查是否为零向量
+                        if np.sum(key) == 0:
+                            key_stats['zero_keys'] += 1
+
+                        # 收集环形特征
+                        if len(key) > 3:
+                            ring_features = key[3:]
+                            ring_activations.extend([float(x) for x in ring_features if x > 0])
+
+            # 输出统计信息
+            if key_stats['dim0']:
+                print(f"Key dimension 0: avg={np.mean(key_stats['dim0']):.4f}")
+                print(f"Key dimension 1: avg={np.mean(key_stats['dim1']):.4f}")
+                print(f"Key dimension 2: avg={np.mean(key_stats['dim2']):.4f}")
+
+                if total_keys > 0:
+                    sparsity = key_stats['zero_keys'] / total_keys
+                    print(f"Key sparsity: {sparsity:.4f}")
+
+                if ring_activations:
+                    avg_activation = np.mean(ring_activations)
+                    print(f"Ring feature activation: {avg_activation:.4f}")
+                else:
+                    print(f"Ring feature activation: 0.0000")
+
+            print(f"Total retrieval keys: {total_keys}")
+
+        except Exception as e:
+            print(f"检索键统计输出失败: {e}")
+
+    def _output_bci_statistics(self):
+        """输出BCI特征统计信息到日志"""
+        try:
+            bci_neighbors = []
+            neighbor_distances = []
+            neighbor_angles = []
+            cross_layer_connections = 0
+            total_connections = 0
+            distance_bits_activated = 0
+            total_distance_bits = 0
+
+            # 收集所有BCI的信息
+            for ll in range(len(self.layer_key_bcis)):
+                for bci in self.layer_key_bcis[ll]:
+                    # 邻居数量
+                    neighbor_count = len(bci.nei_pts)
+                    bci_neighbors.append(neighbor_count)
+
+                    # 距离位统计
+                    total_distance_bits += len(bci.dist_bin)
+                    distance_bits_activated += np.sum(bci.dist_bin)
+
+                    # 邻居点详细信息
+                    for nei_pt in bci.nei_pts:
+                        neighbor_distances.append(float(nei_pt.r))
+                        neighbor_angles.append(float(nei_pt.theta))
+                        total_connections += 1
+
+                        # 跨层连接统计
+                        if nei_pt.level != ll:
+                            cross_layer_connections += 1
+
+            # 输出统计信息
+            if bci_neighbors:
+                print(f"BCI neighbors: {','.join(map(str, bci_neighbors))}")
+
+            if neighbor_distances:
+                print(f"Neighbor distances: {','.join([f'{x:.2f}' for x in neighbor_distances])}")
+
+            if neighbor_angles:
+                print(f"Neighbor angles: {','.join([f'{x:.3f}' for x in neighbor_angles])}")
+
+            if total_connections > 0:
+                print(f"Cross layer connections: {cross_layer_connections}/{total_connections}")
+
+            if total_distance_bits > 0:
+                activation_rate = distance_bits_activated / total_distance_bits
+                print(f"Distance bit activation: {activation_rate:.4f}")
+
+            print(f"Total BCIs: {len([bci for bcis in self.layer_key_bcis for bci in bcis])}")
+
+        except Exception as e:
+            print(f"BCI统计输出失败: {e}")
 
 
 def umeyama_2d(src_points: np.ndarray, dst_points: np.ndarray) -> np.ndarray:
