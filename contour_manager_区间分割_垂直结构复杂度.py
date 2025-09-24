@@ -678,11 +678,6 @@ class ContourManager:
         """输出详细的轮廓统计信息到日志"""
         print("DEBUG: _output_detailed_contour_statistics() 函数开始")
         try:
-            # 现有的实现...
-            print("DEBUG: _output_detailed_contour_statistics() 函数正常结束")
-        except Exception as e:
-            print(f"ERROR: _output_detailed_contour_statistics() 异常: {e}")
-        try:
             contour_sizes = []
             eccentricities = []
             eigenvalue_ratios = []
@@ -715,26 +710,100 @@ class ContourManager:
 
             # 输出到日志
             if contour_sizes:
-                print(f"Contour sizes: {','.join(map(str, contour_sizes))}")
-                print(f"Eccentricities: {','.join([f'{x:.3f}' for x in eccentricities])}")
+                # 基本统计
+                total_contours = len(contour_sizes)
+                min_size = min(contour_sizes)
+                max_size = max(contour_sizes)
+                avg_size = sum(contour_sizes) / total_contours
+                import statistics
+                std_size = statistics.stdev(contour_sizes) if total_contours > 1 else 0
+
+                # 同时输出到print和logging
+                stats_msg = f"CONTOUR_STATS_BASIC: total={total_contours}, min={min_size}, max={max_size}, avg={avg_size:.1f}, std={std_size:.1f}"
+                print(stats_msg)
+                import logging
+                logging.info(stats_msg)
+
+                # 尺寸分布统计
+                size_bins = [
+                    (1, 5, "极小轮廓"),
+                    (6, 15, "小轮廓"),
+                    (16, 50, "中小轮廓"),
+                    (51, 150, "中等轮廓"),
+                    (151, 500, "大轮廓"),
+                    (501, float('inf'), "超大轮廓")
+                ]
+
+                for min_size, max_size, label in size_bins:
+                    if max_size == float('inf'):
+                        count = sum(1 for s in contour_sizes if s >= min_size)
+                    else:
+                        count = sum(1 for s in contour_sizes if min_size <= s <= max_size)
+                    ratio = count / total_contours if total_contours > 0 else 0
+
+                    size_dist_msg = f"CONTOUR_SIZE_DIST: {label}={count}({ratio:.3f})"
+                    print(size_dist_msg)
+                    logging.info(size_dist_msg)
+
+                # 几何特征统计
+                if eccentricities:
+                    avg_ecc = sum(eccentricities) / len(eccentricities)
+                    std_ecc = statistics.stdev(eccentricities) if len(eccentricities) > 1 else 0
+
+                    geom_msg = f"CONTOUR_GEOMETRY: avg_eccentricity={avg_ecc:.3f}, std_eccentricity={std_ecc:.3f}"
+                    print(geom_msg)
+                    logging.info(geom_msg)
+
+                    # 偏心率分布
+                    ecc_bins = [
+                        (0.0, 0.3, "近圆形"),
+                        (0.3, 0.6, "椭圆形"),
+                        (0.6, 0.8, "长椭圆"),
+                        (0.8, 1.0, "极长椭圆")
+                    ]
+
+                    for min_ecc, max_ecc, label in ecc_bins:
+                        count = sum(1 for e in eccentricities if min_ecc <= e < max_ecc)
+                        ratio = count / len(eccentricities)
+
+                        ecc_dist_msg = f"CONTOUR_ECC_DIST: {label}={count}({ratio:.3f})"
+                        print(ecc_dist_msg)
+                        logging.info(ecc_dist_msg)
+
+                # 特征值比例
                 if eigenvalue_ratios:
-                    print(f"Eigenvalue ratios: {','.join([f'{x:.3f}' for x in eigenvalue_ratios])}")
-                print(
-                    f"Significant features: ecc={significant_ecc_count}, com={significant_com_count}, total={len(contour_sizes)}")
+                    avg_ratio = sum(eigenvalue_ratios) / len(eigenvalue_ratios)
+                    eigval_msg = f"CONTOUR_EIGENVALUE: avg_ratio={avg_ratio:.3f}"
+                    print(eigval_msg)
+                    logging.info(eigval_msg)
+
+                # 显著特征统计
+                if total_contours > 0:
+                    ecc_feat_ratio = significant_ecc_count / total_contours
+                    com_feat_ratio = significant_com_count / total_contours
+
+                    feat_msg = f"CONTOUR_SIGNIFICANT_FEATURES: ecc_count={significant_ecc_count}({ecc_feat_ratio:.3f}), com_count={significant_com_count}({com_feat_ratio:.3f})"
+                    print(feat_msg)
+                    logging.info(feat_msg)
+
+                # 高度统计
                 if heights:
-                    print(f"Contour heights: {','.join([f'{x:.2f}' for x in heights])}")
+                    avg_height = sum(heights) / len(heights)
+                    height_msg = f"CONTOUR_HEIGHT: avg_height={avg_height:.2f}"
+                    print(height_msg)
+                    logging.info(height_msg)
+
+            print("DEBUG: _output_detailed_contour_statistics() 函数正常结束")
 
         except Exception as e:
-            print(f"轮廓统计输出失败: {e}")
+            error_msg = f"轮廓统计输出失败: {e}"
+            print(error_msg)
+            import logging
+            logging.error(error_msg)
 
     def _output_retrieval_key_statistics(self):
         """输出检索键特征统计信息到日志"""
         print("DEBUG: _output_retrieval_key_statistics() 函数开始")
-        try:
-            # 现有的实现...
-            print("DEBUG: _output_retrieval_key_statistics() 函数正常结束")
-        except Exception as e:
-            print(f"ERROR: _output_retrieval_key_statistics() 异常: {e}")
         try:
             key_stats = {'dim0': [], 'dim1': [], 'dim2': [], 'zero_keys': 0}
             ring_activations = []
@@ -760,34 +829,90 @@ class ContourManager:
                             ring_activations.extend([float(x) for x in ring_features if x > 0])
 
             # 输出统计信息
+            import logging
+
+            # 基本维度统计
             if key_stats['dim0']:
-                print(f"Key dimension 0: avg={np.mean(key_stats['dim0']):.4f}")
-                print(f"Key dimension 1: avg={np.mean(key_stats['dim1']):.4f}")
-                print(f"Key dimension 2: avg={np.mean(key_stats['dim2']):.4f}")
+                import statistics
 
-                if total_keys > 0:
-                    sparsity = key_stats['zero_keys'] / total_keys
-                    print(f"Key sparsity: {sparsity:.4f}")
+                avg_dim0 = statistics.mean(key_stats['dim0'])
+                avg_dim1 = statistics.mean(key_stats['dim1'])
+                avg_dim2 = statistics.mean(key_stats['dim2'])
 
+                dim_msg = f"KEY_DIMENSIONS: dim0_avg={avg_dim0:.4f}, dim1_avg={avg_dim1:.4f}, dim2_avg={avg_dim2:.4f}"
+                print(dim_msg)
+                logging.info(dim_msg)
+
+                # 维度分布统计
+                if key_stats['dim0']:
+                    min_dim0, max_dim0 = min(key_stats['dim0']), max(key_stats['dim0'])
+                    std_dim0 = statistics.stdev(key_stats['dim0']) if len(key_stats['dim0']) > 1 else 0
+
+                    dim0_dist_msg = f"KEY_DIM0_DIST: min={min_dim0:.4f}, max={max_dim0:.4f}, std={std_dim0:.4f}"
+                    print(dim0_dist_msg)
+                    logging.info(dim0_dist_msg)
+
+                if key_stats['dim1']:
+                    min_dim1, max_dim1 = min(key_stats['dim1']), max(key_stats['dim1'])
+                    std_dim1 = statistics.stdev(key_stats['dim1']) if len(key_stats['dim1']) > 1 else 0
+
+                    dim1_dist_msg = f"KEY_DIM1_DIST: min={min_dim1:.4f}, max={max_dim1:.4f}, std={std_dim1:.4f}"
+                    print(dim1_dist_msg)
+                    logging.info(dim1_dist_msg)
+
+                if key_stats['dim2']:
+                    min_dim2, max_dim2 = min(key_stats['dim2']), max(key_stats['dim2'])
+                    std_dim2 = statistics.stdev(key_stats['dim2']) if len(key_stats['dim2']) > 1 else 0
+
+                    dim2_dist_msg = f"KEY_DIM2_DIST: min={min_dim2:.4f}, max={max_dim2:.4f}, std={std_dim2:.4f}"
+                    print(dim2_dist_msg)
+                    logging.info(dim2_dist_msg)
+
+            # 稀疏性统计
+            if total_keys > 0:
+                sparsity = key_stats['zero_keys'] / total_keys
+                valid_keys = total_keys - key_stats['zero_keys']
+
+                sparse_msg = f"KEY_SPARSITY: total_keys={total_keys}, zero_keys={key_stats['zero_keys']}, sparsity={sparsity:.4f}, valid_keys={valid_keys}"
+                print(sparse_msg)
+                logging.info(sparse_msg)
+
+            # 环形特征统计
+            if ring_activations:
+                import statistics
+                avg_activation = statistics.mean(ring_activations)
+                std_activation = statistics.stdev(ring_activations) if len(ring_activations) > 1 else 0
+                max_activation = max(ring_activations)
+
+                ring_msg = f"KEY_RING_FEATURES: avg_activation={avg_activation:.4f}, std_activation={std_activation:.4f}, max_activation={max_activation:.4f}, active_count={len(ring_activations)}"
+                print(ring_msg)
+                logging.info(ring_msg)
+            else:
+                ring_msg = f"KEY_RING_FEATURES: avg_activation=0.0000, std_activation=0.0000, max_activation=0.0000, active_count=0"
+                print(ring_msg)
+                logging.info(ring_msg)
+
+            # 总体质量评估
+            if total_keys > 0:
+                quality_score = (1.0 - sparsity) * 0.5
                 if ring_activations:
-                    avg_activation = np.mean(ring_activations)
-                    print(f"Ring feature activation: {avg_activation:.4f}")
-                else:
-                    print(f"Ring feature activation: 0.0000")
+                    quality_score += min(0.5, len(ring_activations) / (total_keys * 7) * 0.5)  # 假设每个key有7个ring features
 
-            print(f"Total retrieval keys: {total_keys}")
+                quality_msg = f"KEY_QUALITY: quality_score={quality_score:.4f}"
+                print(quality_msg)
+                logging.info(quality_msg)
+
+            print("DEBUG: _output_retrieval_key_statistics() 函数正常结束")
 
         except Exception as e:
-            print(f"检索键统计输出失败: {e}")
+            error_msg = f"检索键统计输出失败: {e}"
+            print(error_msg)
+            import logging
+            logging.error(error_msg)
 
     def _output_bci_statistics(self):
         """输出BCI特征统计信息到日志"""
         print("DEBUG: _output_bci_statistics() 函数开始")
-        try:
-            # 现有的实现...
-            print("DEBUG: _output_bci_statistics() 函数正常结束")
-        except Exception as e:
-            print(f"ERROR: _output_bci_statistics() 异常: {e}")
         try:
             bci_neighbors = []
             neighbor_distances = []
@@ -796,13 +921,18 @@ class ContourManager:
             total_connections = 0
             distance_bits_activated = 0
             total_distance_bits = 0
+            layer_connectivity = {}  # 记录每层的连接统计
 
             # 收集所有BCI的信息
             for ll in range(len(self.layer_key_bcis)):
+                layer_connections = 0
+                layer_cross_connections = 0
+
                 for bci in self.layer_key_bcis[ll]:
                     # 邻居数量
                     neighbor_count = len(bci.nei_pts)
                     bci_neighbors.append(neighbor_count)
+                    layer_connections += neighbor_count
 
                     # 距离位统计
                     total_distance_bits += len(bci.dist_bin)
@@ -817,28 +947,133 @@ class ContourManager:
                         # 跨层连接统计
                         if nei_pt.level != ll:
                             cross_layer_connections += 1
+                            layer_cross_connections += 1
+
+                # 记录每层的连接信息
+                layer_connectivity[ll] = {
+                    'total_connections': layer_connections,
+                    'cross_layer_connections': layer_cross_connections,
+                    'bcis_count': len(self.layer_key_bcis[ll])
+                }
 
             # 输出统计信息
+            import logging
+            import statistics
+
+            # 基本BCI统计
+            total_bcis = len([bci for bcis in self.layer_key_bcis for bci in bcis])
+
             if bci_neighbors:
-                print(f"BCI neighbors: {','.join(map(str, bci_neighbors))}")
+                avg_neighbors = statistics.mean(bci_neighbors)
+                std_neighbors = statistics.stdev(bci_neighbors) if len(bci_neighbors) > 1 else 0
+                min_neighbors = min(bci_neighbors)
+                max_neighbors = max(bci_neighbors)
 
+                bci_basic_msg = f"BCI_BASIC_STATS: total_bcis={total_bcis}, avg_neighbors={avg_neighbors:.1f}, std_neighbors={std_neighbors:.1f}, min_neighbors={min_neighbors}, max_neighbors={max_neighbors}"
+                print(bci_basic_msg)
+                logging.info(bci_basic_msg)
+
+                # 邻居数分布
+                neighbor_distribution = {
+                    '0_neighbors': sum(1 for n in bci_neighbors if n == 0),
+                    '1-3_neighbors': sum(1 for n in bci_neighbors if 1 <= n <= 3),
+                    '4-6_neighbors': sum(1 for n in bci_neighbors if 4 <= n <= 6),
+                    '7-10_neighbors': sum(1 for n in bci_neighbors if 7 <= n <= 10),
+                    '10+_neighbors': sum(1 for n in bci_neighbors if n > 10)
+                }
+
+                for range_name, count in neighbor_distribution.items():
+                    ratio = count / total_bcis if total_bcis > 0 else 0
+                    neighbor_dist_msg = f"BCI_NEIGHBOR_DIST: {range_name}={count}({ratio:.3f})"
+                    print(neighbor_dist_msg)
+                    logging.info(neighbor_dist_msg)
+
+            # 距离统计
             if neighbor_distances:
-                print(f"Neighbor distances: {','.join([f'{x:.2f}' for x in neighbor_distances])}")
+                avg_distance = statistics.mean(neighbor_distances)
+                std_distance = statistics.stdev(neighbor_distances) if len(neighbor_distances) > 1 else 0
+                min_distance = min(neighbor_distances)
+                max_distance = max(neighbor_distances)
 
+                distance_msg = f"BCI_DISTANCES: avg_distance={avg_distance:.2f}, std_distance={std_distance:.2f}, min_distance={min_distance:.2f}, max_distance={max_distance:.2f}"
+                print(distance_msg)
+                logging.info(distance_msg)
+
+            # 角度多样性统计
             if neighbor_angles:
-                print(f"Neighbor angles: {','.join([f'{x:.3f}' for x in neighbor_angles])}")
+                # 角度分布统计 (将角度转换到0-2π范围)
+                normalized_angles = [(angle + 2 * np.pi) % (2 * np.pi) for angle in neighbor_angles]
+                angle_diversity = statistics.stdev(normalized_angles) if len(normalized_angles) > 1 else 0
 
+                # 角度分布均匀性 (理想情况下应该均匀分布在0-2π)
+                angle_bins = [0] * 8  # 8个45度的扇区
+                for angle in normalized_angles:
+                    bin_idx = int(angle / (np.pi / 4)) % 8
+                    angle_bins[bin_idx] += 1
+
+                angle_uniformity = 1.0 - (max(angle_bins) - min(angle_bins)) / len(
+                    normalized_angles) if normalized_angles else 0
+
+                angle_msg = f"BCI_ANGLES: angle_diversity={angle_diversity:.3f}, angle_uniformity={angle_uniformity:.3f}"
+                print(angle_msg)
+                logging.info(angle_msg)
+
+            # 跨层连接统计
             if total_connections > 0:
-                print(f"Cross layer connections: {cross_layer_connections}/{total_connections}")
+                cross_layer_ratio = cross_layer_connections / total_connections
+                intra_layer_connections = total_connections - cross_layer_connections
 
+                cross_layer_msg = f"BCI_CROSS_LAYER: cross_layer_connections={cross_layer_connections}, intra_layer_connections={intra_layer_connections}, cross_layer_ratio={cross_layer_ratio:.3f}"
+                print(cross_layer_msg)
+                logging.info(cross_layer_msg)
+
+            # 距离位激活统计
             if total_distance_bits > 0:
                 activation_rate = distance_bits_activated / total_distance_bits
-                print(f"Distance bit activation: {activation_rate:.4f}")
 
-            print(f"Total BCIs: {len([bci for bcis in self.layer_key_bcis for bci in bcis])}")
+                bit_msg = f"BCI_DISTANCE_BITS: total_bits={total_distance_bits}, activated_bits={distance_bits_activated}, activation_rate={activation_rate:.4f}"
+                print(bit_msg)
+                logging.info(bit_msg)
+
+            # 每层连接统计
+            for layer, stats in layer_connectivity.items():
+                if stats['bcis_count'] > 0:
+                    avg_conn_per_layer = stats['total_connections'] / stats['bcis_count']
+                    cross_ratio_per_layer = stats['cross_layer_connections'] / max(1, stats['total_connections'])
+
+                    layer_msg = f"BCI_LAYER_{layer}: bcis={stats['bcis_count']}, avg_connections={avg_conn_per_layer:.1f}, cross_layer_ratio={cross_ratio_per_layer:.3f}"
+                    print(layer_msg)
+                    logging.info(layer_msg)
+
+            # 星座复杂度计算
+            constellation_complexity = 0.0
+            if bci_neighbors and neighbor_angles:
+                avg_neighbors = statistics.mean(bci_neighbors)
+                angle_diversity = statistics.stdev(normalized_angles) if len(normalized_angles) > 1 else 0
+                constellation_complexity = avg_neighbors * angle_diversity / 10.0  # 归一化到0-1范围
+
+            complexity_msg = f"BCI_CONSTELLATION_COMPLEXITY: complexity_score={constellation_complexity:.3f}"
+            print(complexity_msg)
+            logging.info(complexity_msg)
+
+            # 连接质量评估
+            connection_quality = 0.0
+            if total_bcis > 0 and bci_neighbors:
+                # 理想的邻居数是3-8个
+                ideal_neighbor_count = sum(1 for n in bci_neighbors if 3 <= n <= 8)
+                connection_quality = ideal_neighbor_count / total_bcis
+
+            quality_msg = f"BCI_CONNECTION_QUALITY: quality_score={connection_quality:.3f}, ideal_bcis_ratio={connection_quality:.3f}"
+            print(quality_msg)
+            logging.info(quality_msg)
+
+            print("DEBUG: _output_bci_statistics() 函数正常结束")
 
         except Exception as e:
-            print(f"BCI统计输出失败: {e}")
+            error_msg = f"BCI统计输出失败: {e}"
+            print(error_msg)
+            import logging
+            logging.error(error_msg)
 
 
 def umeyama_2d(src_points: np.ndarray, dst_points: np.ndarray) -> np.ndarray:
