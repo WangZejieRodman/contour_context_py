@@ -117,6 +117,7 @@ class ContourManager:
             point_cloud: 点云数组，形状为 [N, 3] 或 [N, 4]
             str_id: 字符串ID
         """
+        print(f"DEBUG: make_bev() 开始执行 for {str_id}")
         print(f"[BEV_DEBUG] {str_id}: pointcloud shape={point_cloud.shape}")
         print(f"[BEV_DEBUG] {str_id}: pointcloud hash={hash(point_cloud.tobytes())}")
         print(f"[BEV_DEBUG] {str_id}: first 3 points=\n{point_cloud[:3]}")
@@ -174,14 +175,17 @@ class ContourManager:
         layer_counts = np.sum(self.layer_masks, axis=(0, 1))
         print(f"Pixels with data: {total_pixels_with_data}")
         print(f"Points per level: {layer_counts}")
+        print(f"DEBUG: make_bev() 执行完成 for {str_id}")
 
     def make_contours_recursive(self):
         """递归生成轮廓 - 修改为区间分割模式"""
+        print("DEBUG: make_contours_recursive() 开始执行")
         full_roi = (0, 0, self.cfg.n_col, self.cfg.n_row)
         mask = np.ones((1, 1), dtype=np.uint8)
 
         # 修改：直接处理每个高度区间，不再递归
         self._make_contours_interval_based(full_roi)
+        print("DEBUG: _make_contours_interval_based() 执行完成")
 
         # 对每层的轮廓按面积排序并计算百分比
         for ll in range(len(self.cont_views)):
@@ -199,10 +203,14 @@ class ContourManager:
                     perc = 0.0
                 self.cont_perc[ll].append(perc)
 
-        # ===== 新增：输出详细轮廓统计信息 =====
+        print("DEBUG: 轮廓排序和百分比计算完成")
+
+        # 确保这些函数在方法末尾被调用
         self._output_detailed_contour_statistics()
-        # 生成检索键
         self._make_retrieval_keys()
+        # _make_retrieval_keys()中应该调用：
+        self._output_retrieval_key_statistics()
+        self._output_bci_statistics()
 
     def _make_contours_interval_based(self, cc_roi: Tuple[int, int, int, int]):
         """
@@ -335,6 +343,15 @@ class ContourManager:
             print(f"第{ll}层-全部轮廓的key和bci已生成")
 
         print(f"全部层-全部轮廓的key和bci已生成")
+        # ===== 输出检索键统计信息 =====
+        print("DEBUG: 准备输出检索键统计")  # 添加这行
+        self._output_retrieval_key_statistics()
+        print("DEBUG: _output_retrieval_key_statistics() 执行完成")  # 添加这行
+
+        # ===== BCI统计输出 =====
+        print("DEBUG: 准备输出BCI统计")  # 添加这行
+        self._output_bci_statistics()
+        print("DEBUG: _output_bci_statistics() 执行完成")  # 添加这行
 
         # ===== 输出检索键统计信息 =====
         self._output_retrieval_key_statistics()
@@ -659,6 +676,12 @@ class ContourManager:
 
     def _output_detailed_contour_statistics(self):
         """输出详细的轮廓统计信息到日志"""
+        print("DEBUG: _output_detailed_contour_statistics() 函数开始")
+        try:
+            # 现有的实现...
+            print("DEBUG: _output_detailed_contour_statistics() 函数正常结束")
+        except Exception as e:
+            print(f"ERROR: _output_detailed_contour_statistics() 异常: {e}")
         try:
             contour_sizes = []
             eccentricities = []
@@ -706,6 +729,12 @@ class ContourManager:
 
     def _output_retrieval_key_statistics(self):
         """输出检索键特征统计信息到日志"""
+        print("DEBUG: _output_retrieval_key_statistics() 函数开始")
+        try:
+            # 现有的实现...
+            print("DEBUG: _output_retrieval_key_statistics() 函数正常结束")
+        except Exception as e:
+            print(f"ERROR: _output_retrieval_key_statistics() 异常: {e}")
         try:
             key_stats = {'dim0': [], 'dim1': [], 'dim2': [], 'zero_keys': 0}
             ring_activations = []
@@ -753,6 +782,12 @@ class ContourManager:
 
     def _output_bci_statistics(self):
         """输出BCI特征统计信息到日志"""
+        print("DEBUG: _output_bci_statistics() 函数开始")
+        try:
+            # 现有的实现...
+            print("DEBUG: _output_bci_statistics() 函数正常结束")
+        except Exception as e:
+            print(f"ERROR: _output_bci_statistics() 异常: {e}")
         try:
             bci_neighbors = []
             neighbor_distances = []
