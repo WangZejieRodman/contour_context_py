@@ -79,7 +79,7 @@ class ChileanContourEvaluator:
         config = ContourManagerConfig()
 
         # 根据Chilean地下矿井环境调整参数
-        config.lv_grads = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  # 高度阈值
+        config.lv_grads = [0.000, 5.000]  # 高度阈值
         config.reso_row = 0.2  # 提高分辨率
         config.reso_col = 0.2
         config.n_row = 200  # 增大网格以适应地下环境
@@ -100,7 +100,7 @@ class ChileanContourEvaluator:
 
         config.nnk = 30  # 降低KNN搜索数量以提高召回率
         config.max_fine_opt = 5  # 减少精细优化候选数
-        config.q_levels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        config.q_levels = [0]
 
 
         # 树桶配置
@@ -277,6 +277,8 @@ class ChileanContourEvaluator:
             # 处理点云
             cm.make_bev(pointcloud, str_id)
             cm.make_contours_recursive()
+
+
 
             desc_time = (time.time() - start_time) * 1000
 
