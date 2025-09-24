@@ -22,7 +22,7 @@ class SubprocessLayersExperiment:
 
     def __init__(self):
         # 检查必要文件
-        self.main_script = "contour_chilean_场景识别_不相同时段_不加旋转.py"
+        self.main_script = "contour_chilean_场景识别_不同时段_不加旋转.py"
         self.types_file = "contour_types.py"
         self.manager_file = "contour_manager_区间分割_垂直结构复杂度.py"
 
