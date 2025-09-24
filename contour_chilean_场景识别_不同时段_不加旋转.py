@@ -16,6 +16,7 @@ import logging
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.colors import ListedColormap
+import cv2
 
 # 导入Contour Context相关模块
 from contour_types import (
@@ -88,7 +89,7 @@ class ChileanContourEvaluator:
         config.min_cont_key_cnt = 2  # 降低最小轮廓键数量
         config.min_cont_cell_cnt = 1  # 降低最小轮廓像素数量
         config.piv_firsts = 12  # 增加关键轮廓数量
-        config.dist_firsts = 12
+        config.dist_firsts = 12  #每层面积最大的前12个轮廓
         config.roi_radius = 15.0  # 增大感兴趣区域半径
 
         return config
@@ -100,6 +101,7 @@ class ChileanContourEvaluator:
         config.nnk = 30  # 降低KNN搜索数量以提高召回率
         config.max_fine_opt = 5  # 减少精细优化候选数
         config.q_levels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
 
         # 树桶配置
         tb_cfg = TreeBucketConfig()
@@ -130,7 +132,7 @@ class ChileanContourEvaluator:
         thres_lb.sim_pair.i_orie_sim = 1  # 最低要求
         thres_lb.sim_post.correlation = 0.001  # 几乎不要求
         thres_lb.sim_post.area_perc = 0.0001
-        thres_lb.sim_post.neg_est_dist = -15.0  # 很宽松的距离要求
+        thres_lb.sim_post.neg_est_dist = -20.0  # 很宽松的距离要求
 
         # 上界阈值
         thres_ub = CandidateScoreEnsemble()
@@ -141,7 +143,7 @@ class ChileanContourEvaluator:
         thres_ub.sim_pair.i_orie_sim = 10
         thres_ub.sim_post.correlation = 0.9
         thres_ub.sim_post.area_perc = 0.3
-        thres_ub.sim_post.neg_est_dist = -3.0
+        thres_ub.sim_post.neg_est_dist = -0.1
 
         return thres_lb, thres_ub
 
@@ -275,6 +277,8 @@ class ChileanContourEvaluator:
             # 处理点云
             cm.make_bev(pointcloud, str_id)
             cm.make_contours_recursive()
+
+
 
             desc_time = (time.time() - start_time) * 1000
 
@@ -849,40 +853,6 @@ class ChileanContourEvaluator:
             prefix = f"specified_sample_index_{key}"
             self.visualizer.visualize_pointcloud_pipeline(cm, pointcloud, prefix)
 
-    def visualize_failure_cases(self):
-        """可视化失败案例"""
-
-        # 从失败日志中提取的失败案例ID
-        failure_cases = [3, 6, 28, 49, 51]  # 之前分析出的失败案例
-
-        print(f"\n开始可视化 {len(failure_cases)} 个失败案例...")
-
-        query_set = self.query_sets[0]
-
-        for i, query_key in enumerate(failure_cases):
-            if query_key not in query_set:
-                continue
-
-            item = query_set[query_key]
-            filename = item['query']
-
-            print(f"正在可视化失败案例 {i + 1}/{len(failure_cases)}: {filename}")
-
-            # 加载点云
-            pointcloud = self.load_chilean_pointcloud(filename)
-            if len(pointcloud) == 0:
-                continue
-
-            # 创建轮廓管理器
-            cm = ContourManager(self.cm_config, query_key + 10000)
-            str_id = f"failure_case_{query_key}"
-            cm.make_bev(pointcloud, str_id)
-            cm.make_contours_recursive()
-
-            # 可视化
-            prefix = f"failure_case_{i + 1}_{query_key}"
-            self.visualizer.visualize_pointcloud_pipeline(cm, pointcloud, prefix)
-
 # ========== 添加可视化函数类 ==========
 class ContourVisualizer:
     """轮廓上下文可视化器 - 改进版本"""
@@ -943,43 +913,138 @@ class ContourVisualizer:
         bev_image = cm.get_contour_image(level)
         contours_level = cm.get_lev_contours(level)
 
+        # ✅ 新增验证代码1：验证区间定义一致性
+        print(f"\n=== VERIFICATION L{level} ===")
+        lv_grads = cm.get_config().lv_grads
+        h_min = lv_grads[level]
+        h_max = lv_grads[level + 1]
+        print(f"Expected interval: [{h_min:.1f}, {h_max:.1f})")
+
+        # 检查BEV原始数据在这个区间的像素数
+        original_bev = cm.get_bev_image()
+        original_mask = ((original_bev >= h_min) & (original_bev < h_max))
+        original_pixels = np.sum(original_mask)
+        display_pixels = np.sum(bev_image > 0)
+        print(f"Original BEV pixels in interval: {original_pixels}")
+        print(f"Display BEV pixels: {display_pixels}")
+        print(f"Pixel count match: {original_pixels == display_pixels}")
+
         # 显示BEV二值图
         ax.imshow(bev_image, cmap='gray', origin='lower', alpha=0.8)
 
         colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'cyan']
 
-        # 绘制该层的轮廓和椭圆
+        # ✅ 新增验证代码2：逐个验证轮廓和椭圆的对应关系
         ellipse_count = 0
-        for seq, contour in enumerate(contours_level[:8]):  # 显示前8个
+        for seq, contour in enumerate(contours_level[:12]):  # 显示前12个
             color = colors[seq % len(colors)]
             pos_mean = contour.pos_mean
             cell_cnt = contour.cell_cnt
 
+            print(f"\n--- Contour L{level}S{seq} ---")
+            print(f"pos_mean (row,col): ({pos_mean[0]:.2f}, {pos_mean[1]:.2f})")
+            print(f"cell_cnt: {cell_cnt}")
+            print(f"eig_vals: [{contour.eig_vals[0]:.4f}, {contour.eig_vals[1]:.4f}]")
+
+            # ✅ 验证代码2a：检查椭圆中心是否在显示的白色区域内
+            center_row, center_col = int(round(pos_mean[0])), int(round(pos_mean[1]))
+            if (0 <= center_row < bev_image.shape[0] and 0 <= center_col < bev_image.shape[1]):
+                is_center_white = bev_image[center_row, center_col] > 0
+                print(
+                    f"Ellipse center at display pixel ({center_row}, {center_col}): {'WHITE' if is_center_white else 'BLACK'}")
+
+                # 检查椭圆中心周围3x3区域
+                white_neighbors = 0
+                for dr in [-1, 0, 1]:
+                    for dc in [-1, 0, 1]:
+                        nr, nc = center_row + dr, center_col + dc
+                        if (0 <= nr < bev_image.shape[0] and 0 <= nc < bev_image.shape[1]):
+                            if bev_image[nr, nc] > 0:
+                                white_neighbors += 1
+                print(f"White pixels in 3x3 around center: {white_neighbors}/9")
+            else:
+                print(f"Ellipse center OUTSIDE image bounds!")
+
             # 绘制质心
             ax.plot(pos_mean[1], pos_mean[0], 'o', color=color,
-                    markersize=12, markeredgecolor='black', markeredgewidth=2)
+                    markersize=6, markeredgecolor='black', markeredgewidth=1)
 
             # 绘制协方差椭圆
             if hasattr(contour, 'eig_vals') and hasattr(contour, 'eig_vecs'):
+                # ✅ 验证代码2b：计算椭圆理论覆盖范围
+                major_radius = 2 * np.sqrt(contour.eig_vals[1]) * 2 # 与可视化代码一致
+                minor_radius = 2 * np.sqrt(contour.eig_vals[0]) * 2
+                print(f"Ellipse radii: major={major_radius:.2f}, minor={minor_radius:.2f} pixels")
+
+                # 椭圆主轴方向
+                main_direction = np.arctan2(contour.eig_vecs[1, 1], contour.eig_vecs[0, 1]) * 180 / np.pi
+                print(f"Ellipse main axis angle: {main_direction:.1f} degrees")
+
                 self._draw_covariance_ellipse(ax, pos_mean, contour.eig_vals,
                                               contour.eig_vecs, color, alpha=0.6)
 
                 # 绘制主轴方向
-                main_axis = contour.eig_vecs[:, 1] * np.sqrt(contour.eig_vals[1]) * 3
+                main_axis = contour.eig_vecs[:, 1] * np.sqrt(contour.eig_vals[1]) * 2
                 ax.arrow(pos_mean[1], pos_mean[0], main_axis[1], main_axis[0],
-                         head_width=4, head_length=3, fc=color, ec='black', alpha=0.8, linewidth=2)
+                         head_width=2, head_length=2, fc=color, ec='black', alpha=0.8, linewidth=1.5)
 
                 ellipse_count += 1
+
+            # ✅ 验证代码2c：检查轮廓实际分布范围
+            # 找到属于这个轮廓的所有像素（通过连通组件分析）
+            binary_mask = (bev_image > 0).astype(np.uint8)
+            num_labels, labels = cv2.connectedComponents(binary_mask)
+
+            # 找到包含椭圆中心的连通组件
+            if (0 <= center_row < labels.shape[0] and 0 <= center_col < labels.shape[1]):
+                center_label = labels[center_row, center_col]
+                if center_label > 0:  # 0是背景
+                    component_pixels = np.where(labels == center_label)
+                    if len(component_pixels[0]) > 0:
+                        actual_rows = component_pixels[0]
+                        actual_cols = component_pixels[1]
+                        actual_row_range = (actual_rows.min(), actual_rows.max())
+                        actual_col_range = (actual_cols.min(), actual_cols.max())
+                        actual_span_row = actual_row_range[1] - actual_row_range[0] + 1
+                        actual_span_col = actual_col_range[1] - actual_col_range[0] + 1
+
+                        print(f"Actual contour spans: row={actual_span_row} pixels, col={actual_span_col} pixels")
+                        print(
+                            f"Actual contour bounds: rows=[{actual_row_range[0]}, {actual_row_range[1]}], cols=[{actual_col_range[0]}, {actual_col_range[1]}]")
+
+                        # 比较椭圆覆盖范围与实际轮廓范围
+                        if hasattr(contour, 'eig_vals'):
+                            ellipse_span_estimate = max(major_radius * 2, minor_radius * 2)
+                            print(f"Ellipse span estimate: {ellipse_span_estimate:.1f} pixels")
+                            if ellipse_span_estimate > 0:
+                                print(
+                                    f"Actual vs Ellipse ratio: row={actual_span_row / ellipse_span_estimate:.2f}, col={actual_span_col / ellipse_span_estimate:.2f}")
 
             # 标注
             ax.text(pos_mean[1] + 8, pos_mean[0] + 8, f'S{seq}\n({cell_cnt})',
                     color='black', fontsize=10, weight='bold',
                     bbox=dict(boxstyle="round,pad=0.3", facecolor=color, alpha=0.8))
 
+        # ✅ 验证代码3：添加实际轮廓边界叠加（可选）
+        print(f"\n=== Adding contour boundaries for verification ===")
+        binary_mask = (bev_image > 0).astype(np.uint8)
+        try:
+            contours_cv, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            print(f"Found {len(contours_cv)} contour boundaries via cv2.findContours")
+
+            for i, contour_cv in enumerate(contours_cv[:len(contours_level)]):  # 限制数量匹配
+                # 绘制轮廓边界
+                contour_points = contour_cv.squeeze()
+                if len(contour_points.shape) == 2 and contour_points.shape[0] > 2:
+                    # 注意：cv2.findContours返回的是(x,y)坐标，对应(col,row)
+                    ax.plot(contour_points[:, 0], contour_points[:, 1], '--',
+                            color='white', linewidth=2, alpha=0.8,
+                            label=f'Actual boundary' if i == 0 else "")
+                    print(f"Drew boundary {i} with {len(contour_points)} points")
+        except Exception as e:
+            print(f"Error drawing contour boundaries: {e}")
+
         # 设置标题和标签
-        lv_grads = cm.get_config().lv_grads
-        h_min = lv_grads[level]
-        h_max = lv_grads[level + 1]
         title = f'L{level}: Height [{h_min:.1f}m, {h_max:.1f}m) - {len(contours_level)} contours, {ellipse_count} ellipses'
         ax.set_title(title, fontsize=14, weight='bold')
 
@@ -987,7 +1052,7 @@ class ContourVisualizer:
         config = cm.get_config()
         x_center = config.n_col // 2
         y_center = config.n_row // 2
-        meter_range = 10
+        meter_range = 12
         grid_range = int(meter_range / config.reso_col)
 
         ax.set_xlim(x_center - grid_range, x_center + grid_range)
@@ -1008,11 +1073,16 @@ class ContourVisualizer:
         ax.grid(True, alpha=0.3)
         ax.set_aspect('equal')
 
+        # 添加图例（如果有轮廓边界的话）
+        if len(plt.gca().get_lines()) > len(contours_level):  # 有额外的边界线
+            ax.legend(loc='upper right', fontsize=8)
+
         plt.tight_layout()
         output_path = os.path.join(self.output_dir, f"{filename_prefix}_02_L{level}_bev_ellipses.png")
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close()
         print(f"Level {level} BEV with ellipses saved to: {output_path}")
+        print(f"=== END VERIFICATION L{level} ===\n")
 
     def _plot_3d_ellipses_overview(self, cm: ContourManager, filename_prefix: str):
         """3D椭圆总览"""
@@ -1334,9 +1404,11 @@ class ContourVisualizer:
         from matplotlib.patches import Ellipse
 
         # 计算椭圆参数
-        angle = np.degrees(np.arctan2(eig_vecs[1, 1], eig_vecs[0, 1]))
-        width = 2 * np.sqrt(eig_vals[1]) * 2  # 2 standard deviations
-        height = 2 * np.sqrt(eig_vals[0]) * 2
+        angle = np.degrees(np.arctan2(eig_vecs[0, 1], eig_vecs[1, 1]))
+        #                              ^row分量(Y)    ^col分量(X)
+        # 相当于 atan2(Y, X)
+        width = 2 * np.sqrt(eig_vals[1])  # 2倍标准差，覆盖95%的数据
+        height = 2 * np.sqrt(eig_vals[0])  # 2倍标准差
 
         # 创建椭圆
         ellipse = Ellipse((center[1], center[0]), width, height,
@@ -1511,9 +1583,6 @@ def main():
 
     # 可视化（现在会显示区间信息）
     evaluator.visualize_sample_cases()  # 先测试一个
-
-    # 可视化失败案例
-    #evaluator.visualize_failure_cases()
 
     print("=" * 60)
     print("可视化完成，开始正常评估...")
