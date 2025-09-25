@@ -503,39 +503,92 @@ class SubprocessLayersExperiment:
                 stats['layer_connectivity'] = layer_stats
 
             # 4. 解析相似性检查统计 - 从现有格式
-            check1_matches = re.findall(r'After check 1: (\d+)', content)
-            check2_matches = re.findall(r'After check 2: (\d+)', content)
-            check3_matches = re.findall(r'After check 3: (\d+)', content)
+            similarity_matches = re.findall(
+                r'SIMILARITY_CHECKS: check1_passed=(\d+), check2_passed=(\d+), check3_passed=(\d+)', content)
+            context_matches = re.findall(
+                r'SIMILARITY_CHECKS_CONTEXT: query_id=([^,]+), total_searches=(\d+), total_found=(\d+), total_checks=(\d+), final_candidates=(\d+)',
+                content)
 
-            if check1_matches and check2_matches and check3_matches:
+            if similarity_matches and context_matches:
                 import statistics
-                check1_avg = statistics.mean([int(x) for x in check1_matches])
-                check2_avg = statistics.mean([int(x) for x in check2_matches])
-                check3_avg = statistics.mean([int(x) for x in check3_matches])
 
-                stats['avg_check1_passed'] = check1_avg
-                stats['avg_check2_passed'] = check2_avg
-                stats['avg_check3_passed'] = check3_avg
+                # 解析检查通过数量
+                check1_values = [int(match[0]) for match in similarity_matches]
+                check2_values = [int(match[1]) for match in similarity_matches]
+                check3_values = [int(match[2]) for match in similarity_matches]
 
-                # 尝试估算总查询数
-                total_queries_match = re.search(r'总查询数[：:]\s*(\d+)', content)
-                if total_queries_match:
-                    total_queries = int(total_queries_match.group(1))
-                else:
-                    # 估算总查询数
-                    total_queries = len(check1_matches) * 20  # 假设每个匹配代表20个查询
-                    if total_queries == 0:
-                        total_queries = max(100, int(check1_avg))
+                stats['avg_check1_passed'] = statistics.mean(check1_values) if check1_values else 0
+                stats['avg_check2_passed'] = statistics.mean(check2_values) if check2_values else 0
+                stats['avg_check3_passed'] = statistics.mean(check3_values) if check3_values else 0
 
+                # 解析搜索上下文信息
+                total_searches_values = [int(match[1]) for match in context_matches]
+                total_found_values = [int(match[2]) for match in context_matches]
+                total_checks_values = [int(match[3]) for match in context_matches]
+                final_candidates_values = [int(match[4]) for match in context_matches]
+
+                stats['avg_total_searches'] = statistics.mean(total_searches_values) if total_searches_values else 0
+                stats['avg_total_found'] = statistics.mean(total_found_values) if total_found_values else 0
+                stats['avg_total_checks'] = statistics.mean(total_checks_values) if total_checks_values else 0
+                stats['avg_final_candidates'] = statistics.mean(
+                    final_candidates_values) if final_candidates_values else 0
+
+                # 计算总查询数
+                total_queries = len(similarity_matches)
                 stats['estimated_total_queries'] = total_queries
 
                 # 计算通过率
-                if total_queries > 0:
-                    stats['contour_similarity_pass_rate'] = check1_avg / total_queries
-                if check1_avg > 0:
-                    stats['constellation_similarity_pass_rate'] = check2_avg / check1_avg
-                if check2_avg > 0:
-                    stats['pairwise_similarity_pass_rate'] = check3_avg / check2_avg
+                if total_queries > 0 and stats['avg_total_checks'] > 0:
+                    # 轮廓相似性通过率 = 平均check1通过数 / 平均总检查数
+                    stats['contour_similarity_pass_rate'] = stats['avg_check1_passed'] / stats['avg_total_checks']
+
+                    # 星座相似性通过率 = 平均check2通过数 / 平均check1通过数
+                    if stats['avg_check1_passed'] > 0:
+                        stats['constellation_similarity_pass_rate'] = stats['avg_check2_passed'] / stats[
+                            'avg_check1_passed']
+                    else:
+                        stats['constellation_similarity_pass_rate'] = 0
+
+                    # 对偶相似性通过率 = 平均check3通过数 / 平均check2通过数
+                    if stats['avg_check2_passed'] > 0:
+                        stats['pairwise_similarity_pass_rate'] = stats['avg_check3_passed'] / stats['avg_check2_passed']
+                    else:
+                        stats['pairwise_similarity_pass_rate'] = 0
+                else:
+                    stats['contour_similarity_pass_rate'] = 0
+                    stats['constellation_similarity_pass_rate'] = 0
+                    stats['pairwise_similarity_pass_rate'] = 0
+
+            # 如果没有找到新格式，尝试解析旧格式（向后兼容）
+            elif 'avg_check1_passed' not in stats:
+                check1_matches = re.findall(r'After check 1: (\d+)', content)
+                check2_matches = re.findall(r'After check 2: (\d+)', content)
+                check3_matches = re.findall(r'After check 3: (\d+)', content)
+
+                if check1_matches and check2_matches and check3_matches:
+                    import statistics
+                    stats['avg_check1_passed'] = statistics.mean([int(x) for x in check1_matches])
+                    stats['avg_check2_passed'] = statistics.mean([int(x) for x in check2_matches])
+                    stats['avg_check3_passed'] = statistics.mean([int(x) for x in check3_matches])
+
+                    # 尝试从日志中解析实际的查询数量（保持原有逻辑）
+                    total_queries = None
+                    total_queries_match = re.search(r'总查询数[：:]\s*(\d+)', content)
+                    if total_queries_match:
+                        total_queries = int(total_queries_match.group(1))
+                    else:
+                        total_queries = len(check1_matches) * 10  # 估算
+
+                    stats['estimated_total_queries'] = total_queries
+
+                    # 计算通过率（使用估算的总查询数）
+                    if total_queries > 0:
+                        stats['contour_similarity_pass_rate'] = stats['avg_check1_passed'] / total_queries
+                    if stats['avg_check1_passed'] > 0:
+                        stats['constellation_similarity_pass_rate'] = stats['avg_check2_passed'] / stats[
+                            'avg_check1_passed']
+                    if stats['avg_check2_passed'] > 0:
+                        stats['pairwise_similarity_pass_rate'] = stats['avg_check3_passed'] / stats['avg_check2_passed']
 
             # 5. 计算综合特征质量指数
             stats['feature_quality_index'] = self._calculate_enhanced_feature_quality_index(stats)
