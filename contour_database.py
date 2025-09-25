@@ -1063,8 +1063,9 @@ class ContourDB:
         assert len(config.q_levels) > 0
 
     def query_ranged_knn(self, q_ptr: ContourManager,
-                        thres_lb: CandidateScoreEnsemble,
-                        thres_ub: CandidateScoreEnsemble) -> Tuple[List[ContourManager], List[float], List[np.ndarray]]:
+                         thres_lb: CandidateScoreEnsemble,
+                         thres_ub: CandidateScoreEnsemble) -> Tuple[
+        List[ContourManager], List[float], List[np.ndarray]]:
         """
         范围KNN查询
 
@@ -1085,20 +1086,32 @@ class ContourDB:
 
         cand_mng = CandidateManager(q_ptr, thres_lb, thres_ub)
 
+        # 统计变量
+        total_searches = 0
+        total_found = 0
+        total_checks = 0
+
         # 为每个层级进行搜索
         for ll in range(len(self.cfg.q_levels)):
             q_bcis = q_ptr.get_lev_bci(self.cfg.q_levels[ll])
             q_keys = q_ptr.get_lev_retrieval_key(self.cfg.q_levels[ll])
 
+            # 输出查询键信息（用于调试）
             for seq in range(len(q_keys)):
                 if np.sum(q_keys[seq]) != 0:
                     print(f"[QUERY] {q_ptr.get_str_id()} L{self.cfg.q_levels[ll]}S{seq}: "
                           f"query_key[0]={q_keys[seq][0]:.6f}")
+                    # ✅ 添加logging输出
+                    import logging
+                    logging.info(
+                        f"QUERY_KEY_INFO: query_id={q_ptr.get_str_id()}, level={self.cfg.q_levels[ll]}, seq={seq}, key_0={q_keys[seq][0]:.6f}")
 
             assert len(q_bcis) == len(q_keys)
 
             for seq in range(len(q_bcis)):
                 if np.sum(q_keys[seq]) != 0:
+                    total_searches += 1
+
                     # 1. 查询
                     start_time = time.time()
                     tmp_res = []
@@ -1127,9 +1140,16 @@ class ContourDB:
                     print(f"Dist ub: {dist_ub:.6f}")
                     print(f"L:{self.cfg.q_levels[ll]} S:{seq}. Found in range: {len(tmp_res)}")
 
+                    # ✅ 添加搜索结果logging
+                    logging.info(
+                        f"KNN_SEARCH_RESULT: query_id={q_ptr.get_str_id()}, level={self.cfg.q_levels[ll]}, seq={seq}, found_count={len(tmp_res)}, dist_ub={dist_ub:.6f}")
+
+                    total_found += len(tmp_res)
+
                     # 2. 检查
                     start_time = time.time()
                     for sear_res in tmp_res:
+                        total_checks += 1
                         cnt_chk_pass = cand_mng.check_cand_with_hint(
                             self.all_bevs[sear_res[0].gidx],
                             ConstellationPair(self.cfg.q_levels[ll], sear_res[0].seq, seq),
@@ -1143,28 +1163,86 @@ class ContourDB:
         t5 += time.time() - start_time
 
         num_best_cands = len(res_cand_ptr)
+
+        # ✅ 改进的相似性检查统计输出
         if num_best_cands:
+            # 原有的print输出（保持兼容性）
             print(f"After check 1: {cand_mng.cand_aft_check1}")
             print(f"After check 2: {cand_mng.cand_aft_check2}")
             print(f"After check 3: {cand_mng.cand_aft_check3}")
+
+            # ✅ 新增：结构化的logging输出
+            import logging
+            logging.info(
+                f"SIMILARITY_CHECKS: check1_passed={cand_mng.cand_aft_check1}, check2_passed={cand_mng.cand_aft_check2}, check3_passed={cand_mng.cand_aft_check3}")
+
+            # ✅ 查询上下文信息
+            logging.info(
+                f"SIMILARITY_CHECKS_CONTEXT: query_id={q_ptr.get_str_id()}, total_searches={total_searches}, total_found={total_found}, total_checks={total_checks}, final_candidates={num_best_cands}")
+
+            # ✅ 统计相似性检查的通过率
+            if total_checks > 0:
+                check1_rate = cand_mng.cand_aft_check1 / total_checks if total_checks > 0 else 0
+                logging.info(
+                    f"SIMILARITY_PASS_RATES: contour_pass_rate={check1_rate:.4f}, constellation_pass_rate={cand_mng.cand_aft_check2 / max(1, cand_mng.cand_aft_check1):.4f}, pairwise_pass_rate={cand_mng.cand_aft_check3 / max(1, cand_mng.cand_aft_check2):.4f}")
+
+            # ✅ 额外的性能分析信息
+            if cand_mng.cand_aft_check1 > 0:
+                check2_pass_rate = cand_mng.cand_aft_check2 / cand_mng.cand_aft_check1
+                print(f"Constellation similarity pass rate: {check2_pass_rate:.4f}")
+                logging.info(f"DETAILED_SIMILARITY_ANALYSIS: check2_from_check1_rate={check2_pass_rate:.4f}")
+
+            if cand_mng.cand_aft_check2 > 0:
+                check3_pass_rate = cand_mng.cand_aft_check3 / cand_mng.cand_aft_check2
+                print(f"Pairwise similarity pass rate: {check3_pass_rate:.4f}")
+                logging.info(f"DETAILED_SIMILARITY_ANALYSIS: check3_from_check2_rate={check3_pass_rate:.4f}")
+
+            # ✅ 记录相似性检查的分布情况
+            logging.info(
+                f"SIMILARITY_CHECK_DISTRIBUTION: check1_count={cand_mng.cand_aft_check1}, check2_count={cand_mng.cand_aft_check2}, check3_count={cand_mng.cand_aft_check3}")
+
         else:
             print("No candidates are valid after checks.")
 
+            # ✅ 记录失败情况的详细信息
+            import logging
+            logging.info(
+                f"SIMILARITY_CHECKS: check1_passed={cand_mng.cand_aft_check1}, check2_passed={cand_mng.cand_aft_check2}, check3_passed={cand_mng.cand_aft_check3}")
+            logging.info(
+                f"SIMILARITY_CHECKS_CONTEXT: query_id={q_ptr.get_str_id()}, total_searches={total_searches}, total_found={total_found}, total_checks={total_checks}, final_candidates=0")
+            logging.info(
+                f"QUERY_FAILURE_ANALYSIS: no_valid_candidates=True, search_success={total_found > 0}, check_attempts={total_checks}")
+
+            # ✅ 分析失败原因
+            if total_searches == 0:
+                logging.info(f"FAILURE_REASON: no_searches_performed=True")
+            elif total_found == 0:
+                logging.info(f"FAILURE_REASON: no_candidates_found_in_knn=True")
+            elif total_checks == 0:
+                logging.info(f"FAILURE_REASON: no_similarity_checks_performed=True")
+            else:
+                logging.info(f"FAILURE_REASON: all_similarity_checks_failed=True")
+
+        # 构建返回结果
         for i in range(num_best_cands):
             cand_ptrs.append(res_cand_ptr[i])
             cand_corr.append(res_corr[i])
             cand_tf.append(res_T[i])
 
+        # ✅ 最终结果统计
         if num_best_cands > 0:
+            # 输出详细的检查统计（原有逻辑）
             print(f"After check 1: {cand_mng.cand_aft_check1}")
             print(f"After check 2: {cand_mng.cand_aft_check2}")
             print(f"After check 3: {cand_mng.cand_aft_check3}")
 
-            # ===== 新增：详细相似性检查统计 =====
-            total_queries = 1000  # 可以根据实际情况调整
+            # ✅ 相似性检查统计分析
+            total_queries = 1  # 当前查询计为1个查询
             if total_queries > 0:
-                check1_pass_rate = cand_mng.cand_aft_check1 / total_queries
+                check1_pass_rate = cand_mng.cand_aft_check1 / max(1, total_checks)  # 相对于检查总数
                 print(f"Similarity check pass rates: check1={check1_pass_rate:.4f}")
+                logging.info(
+                    f"QUERY_SUMMARY: query_id={q_ptr.get_str_id()}, success=True, best_correlation={res_corr[0]:.6f}")
 
                 if cand_mng.cand_aft_check1 > 0:
                     check2_pass_rate = cand_mng.cand_aft_check2 / cand_mng.cand_aft_check1
@@ -1173,6 +1251,14 @@ class ContourDB:
                 if cand_mng.cand_aft_check2 > 0:
                     check3_pass_rate = cand_mng.cand_aft_check3 / cand_mng.cand_aft_check2
                     print(f"Pairwise similarity pass rate: {check3_pass_rate:.4f}")
+
+            # ✅ 记录最佳候选的详细信息
+            for i in range(min(3, num_best_cands)):  # 记录前3个最佳候选
+                logging.info(
+                    f"BEST_CANDIDATE_{i}: candidate_id={res_cand_ptr[i].get_str_id()}, correlation={res_corr[i]:.6f}")
+        else:
+            # ✅ 查询失败的总结
+            logging.info(f"QUERY_SUMMARY: query_id={q_ptr.get_str_id()}, success=False, reason=no_valid_candidates")
 
         return cand_ptrs, cand_corr, cand_tf
 
