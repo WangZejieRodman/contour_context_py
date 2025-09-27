@@ -52,6 +52,62 @@ class ChileanContourEvaluator:
         )
         self.logger = logging.getLogger(__name__)
 
+        self.contour_stats = {
+            'total_contours': [],
+            'tiny_contour_ratios': [],
+            'small_contour_ratios': [],
+            'medium_small_contour_ratios': [],
+            'medium_contour_ratios': [],
+            'large_contour_ratios': [],
+            'super_large_contour_ratios': [],
+            'avg_eccentricities': [],
+            'std_eccentricities': [],
+            'significant_ecc_ratios': [],
+            'significant_com_ratios': [],
+            'avg_sizes': [],
+            'std_sizes': [],
+            'min_sizes': [],
+            'max_sizes': [],
+            'avg_eigenvalue_ratios': [],
+            'avg_heights': []
+        }
+
+        self.key_stats = {
+            'sparsity_ratios': [],
+            'quality_scores': [],
+            'ring_activations': []
+        }
+
+        self.bci_stats = {
+            'avg_neighbors': [],
+            'std_neighbors': [],
+            'min_neighbors': [],
+            'max_neighbors': [],
+            'neighbor_dist_0': [],
+            'neighbor_dist_1_3': [],
+            'neighbor_dist_4_6': [],
+            'neighbor_dist_7_10': [],
+            'neighbor_dist_10_plus': [],
+            'avg_distances': [],
+            'std_distances': [],
+            'min_distances': [],
+            'max_distances': [],
+            'angle_diversities': [],
+            'angle_uniformities': [],
+            'cross_layer_ratios': [],
+            'activation_rates': [],
+            'constellation_complexities': [],
+            'connection_qualities': []
+        }
+
+        self.similarity_stats = {
+            'total_searches': 0,
+            'total_checks': 0,
+            'check1_passed': 0,
+            'check2_passed': 0,
+            'check3_passed': 0
+        }
+
         # 加载数据集
         self.database_sets = self.load_sets_dict(self.database_file)
         self.query_sets = self.load_sets_dict(self.query_file)
@@ -71,25 +127,82 @@ class ChileanContourEvaluator:
         self.logger.info(f"评估任务：历史地图(100-100) vs 当前观测(190-190)")
         self.processed_cloud_count = 0
 
-        # ✅ 添加可视化器
+        # 添加可视化器
         self.visualizer = ContourVisualizer()
+
+        # 添加统计收集器
+        self.contour_stats = {
+            'total_contours': [],
+            'tiny_contour_ratios': [],
+            'small_contour_ratios': [],
+            'medium_small_contour_ratios': [],
+            'medium_contour_ratios': [],
+            'large_contour_ratios': [],
+            'super_large_contour_ratios': [],
+            'avg_eccentricities': [],
+            'std_eccentricities': [],
+            'significant_ecc_ratios': [],
+            'significant_com_ratios': [],
+            'avg_sizes': [],
+            'std_sizes': [],
+            'min_sizes': [],
+            'max_sizes': [],
+            'avg_eigenvalue_ratios': [],
+            'avg_heights': []
+        }
+
+        self.key_stats = {
+            'sparsity_ratios': [],
+            'quality_scores': [],
+            'ring_activations': []
+        }
+
+        self.bci_stats = {
+            'avg_neighbors': [],
+            'std_neighbors': [],
+            'min_neighbors': [],
+            'max_neighbors': [],
+            'neighbor_dist_0': [],
+            'neighbor_dist_1_3': [],
+            'neighbor_dist_4_6': [],
+            'neighbor_dist_7_10': [],
+            'neighbor_dist_10_plus': [],
+            'avg_distances': [],
+            'std_distances': [],
+            'min_distances': [],
+            'max_distances': [],
+            'angle_diversities': [],
+            'angle_uniformities': [],
+            'cross_layer_ratios': [],
+            'activation_rates': [],
+            'constellation_complexities': [],
+            'connection_qualities': []
+        }
+
+        self.similarity_stats = {
+            'total_searches': 0,
+            'total_checks': 0,
+            'check1_passed': 0,
+            'check2_passed': 0,
+            'check3_passed': 0
+        }
 
     def create_contour_manager_config(self) -> ContourManagerConfig:
         """为Chilean数据集创建轮廓管理器配置"""
         config = ContourManagerConfig()
 
         # 根据Chilean地下矿井环境调整参数
-        config.lv_grads = [0.000, 5.000]  # 高度阈值
+        config.lv_grads = [0.0, 0.625, 1.25, 1.875, 2.5, 3.125, 3.75, 4.375, 5.0]  # 高度阈值
         config.reso_row = 0.2  # 提高分辨率
         config.reso_col = 0.2
         config.n_row = 200  # 增大网格以适应地下环境
         config.n_col = 200
         config.lidar_height = 0.0  # 地下环境激光雷达高度较低
         config.blind_sq = 0.0  # 减小盲区
-        config.min_cont_key_cnt = 2  # 降低最小轮廓键数量
-        config.min_cont_cell_cnt = 1  # 降低最小轮廓像素数量
-        config.piv_firsts = 12  # 增加关键轮廓数量
-        config.dist_firsts = 12  #每层面积最大的前12个轮廓
+        config.min_cont_key_cnt = 1  # 降低最小轮廓键 像素数量
+        config.min_cont_cell_cnt = 1  # 降低最小轮廓 像素数量
+        config.piv_firsts = 20  # 检索键生成数量
+        config.dist_firsts = 12  #BCI邻居搜索范围
         config.roi_radius = 15.0  # 增大感兴趣区域半径
 
         return config
@@ -100,7 +213,7 @@ class ChileanContourEvaluator:
 
         config.nnk = 30  # 降低KNN搜索数量以提高召回率
         config.max_fine_opt = 5  # 减少精细优化候选数
-        config.q_levels = [0]
+        config.q_levels = [0, 1, 2, 3, 4, 5, 6, 7]
 
 
         # 树桶配置
@@ -278,6 +391,58 @@ class ChileanContourEvaluator:
             cm.make_bev(pointcloud, str_id)
             cm.make_contours_recursive()
 
+            try:
+                contour_stats = cm._output_detailed_contour_statistics()
+                key_stats = cm._output_retrieval_key_statistics()
+                bci_stats = cm._output_bci_statistics()
+
+                # 收集轮廓统计
+                self.contour_stats['total_contours'].append(contour_stats['total_contours'])
+                self.contour_stats['tiny_contour_ratios'].append(contour_stats['tiny_contour_ratio'])
+                self.contour_stats['small_contour_ratios'].append(contour_stats['small_contour_ratio'])
+                self.contour_stats['medium_small_contour_ratios'].append(contour_stats['medium_small_contour_ratio'])
+                self.contour_stats['medium_contour_ratios'].append(contour_stats['medium_contour_ratio'])
+                self.contour_stats['large_contour_ratios'].append(contour_stats['large_contour_ratio'])
+                self.contour_stats['super_large_contour_ratios'].append(contour_stats['super_large_contour_ratio'])
+                self.contour_stats['avg_eccentricities'].append(contour_stats['avg_eccentricity'])
+                self.contour_stats['std_eccentricities'].append(contour_stats['std_eccentricity'])
+                self.contour_stats['significant_ecc_ratios'].append(contour_stats['significant_ecc_ratio'])
+                self.contour_stats['significant_com_ratios'].append(contour_stats['significant_com_ratio'])
+                self.contour_stats['avg_sizes'].append(contour_stats['avg_size'])
+                self.contour_stats['std_sizes'].append(contour_stats['std_size'])
+                self.contour_stats['min_sizes'].append(contour_stats['min_size'])
+                self.contour_stats['max_sizes'].append(contour_stats['max_size'])
+                self.contour_stats['avg_eigenvalue_ratios'].append(contour_stats['avg_eigenvalue_ratio'])
+                self.contour_stats['avg_heights'].append(contour_stats['avg_height'])
+
+                # 收集特征质量统计
+                self.key_stats['sparsity_ratios'].append(key_stats['sparsity_ratio'])
+                self.key_stats['quality_scores'].append(key_stats['quality_score'])
+                self.key_stats['ring_activations'].append(key_stats['ring_activation'])
+
+                # 收集BCI统计
+                self.bci_stats['avg_neighbors'].append(bci_stats['avg_neighbors'])
+                self.bci_stats['std_neighbors'].append(bci_stats['std_neighbors'])
+                self.bci_stats['min_neighbors'].append(bci_stats['min_neighbors'])
+                self.bci_stats['max_neighbors'].append(bci_stats['max_neighbors'])
+                self.bci_stats['neighbor_dist_0'].append(bci_stats['neighbor_dist_0'])
+                self.bci_stats['neighbor_dist_1_3'].append(bci_stats['neighbor_dist_1_3'])
+                self.bci_stats['neighbor_dist_4_6'].append(bci_stats['neighbor_dist_4_6'])
+                self.bci_stats['neighbor_dist_7_10'].append(bci_stats['neighbor_dist_7_10'])
+                self.bci_stats['neighbor_dist_10_plus'].append(bci_stats['neighbor_dist_10_plus'])
+                self.bci_stats['avg_distances'].append(bci_stats['avg_distance'])
+                self.bci_stats['std_distances'].append(bci_stats['std_distance'])
+                self.bci_stats['min_distances'].append(bci_stats['min_distance'])
+                self.bci_stats['max_distances'].append(bci_stats['max_distance'])
+                self.bci_stats['angle_diversities'].append(bci_stats['angle_diversity'])
+                self.bci_stats['angle_uniformities'].append(bci_stats['angle_uniformity'])
+                self.bci_stats['cross_layer_ratios'].append(bci_stats['cross_layer_ratio'])
+                self.bci_stats['activation_rates'].append(bci_stats['activation_rate'])
+                self.bci_stats['constellation_complexities'].append(bci_stats['constellation_complexity'])
+                self.bci_stats['connection_qualities'].append(bci_stats['connection_quality'])
+
+            except Exception as e:
+                self.logger.warning(f"统计数据收集失败: {e}")
 
 
             desc_time = (time.time() - start_time) * 1000
@@ -494,8 +659,16 @@ class ChileanContourEvaluator:
 
                 # 在数据库中检索
                 try:
-                    candidate_cms, correlations, transforms = self.contour_db.query_ranged_knn(
+                    # ✅ 修改这里：接收相似性统计数据
+                    candidate_cms, correlations, transforms, query_similarity_stats = self.contour_db.query_ranged_knn(
                         query_cm, self.thres_lb, self.thres_ub)
+
+                    # ✅ 累加相似性统计
+                    self.similarity_stats['total_searches'] += query_similarity_stats['total_searches']
+                    self.similarity_stats['total_checks'] += query_similarity_stats['total_checks']
+                    self.similarity_stats['check1_passed'] += query_similarity_stats['check1_passed']
+                    self.similarity_stats['check2_passed'] += query_similarity_stats['check2_passed']
+                    self.similarity_stats['check3_passed'] += query_similarity_stats['check3_passed']
 
                     if len(candidate_cms) == 0:
                         failure_statistics['no_retrieval_results'] += 1
@@ -852,6 +1025,169 @@ class ChileanContourEvaluator:
             # 可视化
             prefix = f"specified_sample_index_{key}"
             self.visualizer.visualize_pointcloud_pipeline(cm, pointcloud, prefix)
+
+    def output_ablation_summary(self, experiment_name: str, param_value):
+        """输出消融实验汇总"""
+
+        # 创建专门的消融实验报告文件
+        report_file = f"ablation_report_{experiment_name}_param_{param_value}.txt"
+
+        # 准备报告内容
+        report_lines = []
+
+        # report_lines.append(f"\n实验{experiment_name}: min_cont_cell_cnt消融实验")  # B1
+        # report_lines.append(f"\n实验{experiment_name}: min_cont_key_cnt消融实验")   # B2
+        report_lines.append(f"\n实验{experiment_name}: piv_firsts消融实验")        # B3a
+        # report_lines.append(f"\n实验{experiment_name}: dist_firsts消融实验")       # B3b
+
+        report_lines.append("=" * 40)
+        report_lines.append(f"参数设置: {param_value}")
+        report_lines.append("基线配置: 8层, 高度0-5m, 层间距0.625m")
+
+        report_lines.append("\n轮廓统计:")
+        if self.contour_stats['total_contours']:
+            avg_total_contours = np.mean(self.contour_stats['total_contours'])
+            avg_tiny_ratio = np.mean(self.contour_stats['tiny_contour_ratios']) * 100
+            avg_small_ratio = np.mean(self.contour_stats['small_contour_ratios']) * 100
+            avg_medium_small_ratio = np.mean(self.contour_stats['medium_small_contour_ratios']) * 100
+            avg_medium_ratio = np.mean(self.contour_stats['medium_contour_ratios']) * 100
+            avg_large_ratio = np.mean(self.contour_stats['large_contour_ratios']) * 100
+            avg_super_large_ratio = np.mean(self.contour_stats['super_large_contour_ratios']) * 100
+            avg_eccentricity = np.mean(self.contour_stats['avg_eccentricities'])
+            std_eccentricity = np.mean(self.contour_stats['std_eccentricities'])
+            avg_significant_ecc_ratio = np.mean(self.contour_stats['significant_ecc_ratios']) * 100
+            avg_significant_com_ratio = np.mean(self.contour_stats['significant_com_ratios']) * 100
+            avg_size = np.mean(self.contour_stats['avg_sizes'])
+            std_size = np.mean(self.contour_stats['std_sizes'])
+            avg_min_size = np.mean(self.contour_stats['min_sizes'])
+            avg_max_size = np.mean(self.contour_stats['max_sizes'])
+            avg_eigenvalue_ratio = np.mean(self.contour_stats['avg_eigenvalue_ratios'])
+            avg_height = np.mean(self.contour_stats['avg_heights'])
+
+            report_lines.append(f"- 平均总轮廓数: {avg_total_contours:.1f}")
+            report_lines.append(f"- 轮廓尺寸分布:")
+            report_lines.append(f"  * 极小轮廓(1-5): {avg_tiny_ratio:.1f}%")
+            report_lines.append(f"  * 小轮廓(6-15): {avg_small_ratio:.1f}%")
+            report_lines.append(f"  * 中小轮廓(16-50): {avg_medium_small_ratio:.1f}%")
+            report_lines.append(f"  * 中等轮廓(51-150): {avg_medium_ratio:.1f}%")
+            report_lines.append(f"  * 大轮廓(151-500): {avg_large_ratio:.1f}%")
+            report_lines.append(f"  * 超大轮廓(500+): {avg_super_large_ratio:.1f}%")
+            report_lines.append(f"- 平均偏心率: {avg_eccentricity:.3f} ± {std_eccentricity:.3f}")
+            report_lines.append(f"- 显著特征比例:")
+            report_lines.append(f"  * 显著偏心率特征: {avg_significant_ecc_ratio:.1f}%")
+            report_lines.append(f"  * 显著质心特征: {avg_significant_com_ratio:.1f}%")
+            report_lines.append(
+                f"- 轮廓尺寸统计: 平均{avg_size:.1f} ± {std_size:.1f} (范围: {avg_min_size:.1f}-{avg_max_size:.1f})")
+            report_lines.append(f"- 平均特征值比例: {avg_eigenvalue_ratio:.3f}")
+            report_lines.append(f"- 平均轮廓高度: {avg_height:.2f}m")
+        else:
+            report_lines.append("- 轮廓统计数据为空")
+
+        report_lines.append("\n特征质量:")
+        if self.key_stats['sparsity_ratios']:
+            avg_sparsity = np.mean(self.key_stats['sparsity_ratios'])
+            avg_quality = np.mean(self.key_stats['quality_scores'])
+            avg_ring = np.mean(self.key_stats['ring_activations'])
+
+            report_lines.append(f"- 平均稀疏度: {avg_sparsity:.3f}")
+            report_lines.append(f"- 平均质量得分: {avg_quality:.3f}")
+            report_lines.append(f"- 平均环形激活: {avg_ring:.1f}")
+        else:
+            report_lines.append("- 特征质量统计数据为空")
+
+        report_lines.append("\nBCI连接:")
+        if self.bci_stats['avg_neighbors']:
+            avg_neighbors = np.mean(self.bci_stats['avg_neighbors'])
+            std_neighbors = np.mean(self.bci_stats['std_neighbors'])
+            avg_min_neighbors = np.mean(self.bci_stats['min_neighbors'])
+            avg_max_neighbors = np.mean(self.bci_stats['max_neighbors'])
+            avg_neighbor_dist_0 = np.mean(self.bci_stats['neighbor_dist_0']) * 100
+            avg_neighbor_dist_1_3 = np.mean(self.bci_stats['neighbor_dist_1_3']) * 100
+            avg_neighbor_dist_4_6 = np.mean(self.bci_stats['neighbor_dist_4_6']) * 100
+            avg_neighbor_dist_7_10 = np.mean(self.bci_stats['neighbor_dist_7_10']) * 100
+            avg_neighbor_dist_10_plus = np.mean(self.bci_stats['neighbor_dist_10_plus']) * 100
+            avg_distance = np.mean(self.bci_stats['avg_distances'])
+            std_distance = np.mean(self.bci_stats['std_distances'])
+            avg_min_distance = np.mean(self.bci_stats['min_distances'])
+            avg_max_distance = np.mean(self.bci_stats['max_distances'])
+            avg_angle_diversity = np.mean(self.bci_stats['angle_diversities'])
+            avg_angle_uniformity = np.mean(self.bci_stats['angle_uniformities'])
+            avg_cross_layer = np.mean(self.bci_stats['cross_layer_ratios']) * 100
+            avg_activation_rate = np.mean(self.bci_stats['activation_rates'])
+            avg_complexity = np.mean(self.bci_stats['constellation_complexities'])
+            avg_connection_quality = np.mean(self.bci_stats['connection_qualities'])
+
+            report_lines.append(
+                f"- 平均邻居数: {avg_neighbors:.1f} ± {std_neighbors:.1f} (范围: {avg_min_neighbors:.1f}-{avg_max_neighbors:.1f})")
+            report_lines.append(f"- BCI邻居分布:")
+            report_lines.append(f"  * 0个邻居: {avg_neighbor_dist_0:.1f}%")
+            report_lines.append(f"  * 1-3个邻居: {avg_neighbor_dist_1_3:.1f}%")
+            report_lines.append(f"  * 4-6个邻居: {avg_neighbor_dist_4_6:.1f}%")
+            report_lines.append(f"  * 7-10个邻居: {avg_neighbor_dist_7_10:.1f}%")
+            report_lines.append(f"  * 10+个邻居: {avg_neighbor_dist_10_plus:.1f}%")
+            report_lines.append(
+                f"- 邻居距离统计: {avg_distance:.2f} ± {std_distance:.2f} (范围: {avg_min_distance:.2f}-{avg_max_distance:.2f})")
+            report_lines.append(f"- 角度特征: 多样性{avg_angle_diversity:.3f}, 均匀性{avg_angle_uniformity:.3f}")
+            report_lines.append(f"- 平均跨层连接比例: {avg_cross_layer:.1f}%")
+            report_lines.append(f"- 平均距离位激活率: {avg_activation_rate:.3f}")
+            report_lines.append(f"- 平均星座复杂度: {avg_complexity:.3f}")
+            report_lines.append(f"- 平均连接质量: {avg_connection_quality:.3f}")
+        else:
+            report_lines.append("- BCI连接统计数据为空")
+
+        report_lines.append(f"\n相似性检查统计:")
+        if self.similarity_stats['total_checks'] > 0:
+            check1_rate = self.similarity_stats['check1_passed'] / self.similarity_stats['total_checks'] * 100
+            report_lines.append(f"- 总搜索次数: {self.similarity_stats['total_searches']}")
+            report_lines.append(f"- 总检查次数: {self.similarity_stats['total_checks']}")
+            report_lines.append(f"- 轮廓相似性通过率: {check1_rate:.1f}%")
+            if self.similarity_stats['check1_passed'] > 0:
+                check2_rate = self.similarity_stats['check2_passed'] / self.similarity_stats['check1_passed'] * 100
+                report_lines.append(f"- 星座相似性通过率: {check2_rate:.1f}%")
+            if self.similarity_stats['check2_passed'] > 0:
+                check3_rate = self.similarity_stats['check3_passed'] / self.similarity_stats['check2_passed'] * 100
+                report_lines.append(f"- 成对相似性通过率: {check3_rate:.1f}%")
+        else:
+            report_lines.append("- 相似性检查统计数据为空")
+
+        # 同时输出到控制台和文件
+        for line in report_lines:
+            print(line)  # 输出到控制台
+
+        # 保存到文件
+        with open(report_file, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(report_lines))
+
+        print(f"\n消融实验报告已保存到: {report_file}")
+
+    def clear_statistics(self):
+        """清空统计数据，为下一轮实验准备"""
+        self.contour_stats = {
+            'total_contours': [],
+            'tiny_contour_ratios': [],
+            'avg_eccentricities': []
+        }
+
+        self.key_stats = {
+            'sparsity_ratios': [],
+            'quality_scores': [],
+            'ring_activations': []
+        }
+
+        self.bci_stats = {
+            'avg_neighbors': [],
+            'cross_layer_ratios': [],
+            'constellation_complexities': []
+        }
+
+        self.similarity_stats = {
+            'total_searches': 0,
+            'total_checks': 0,
+            'check1_passed': 0,
+            'check2_passed': 0,
+            'check3_passed': 0
+        }
+    # ===== 统计汇总方法添加结束 =====
 
 # ========== 添加可视化函数类 ==========
 class ContourVisualizer:
@@ -1592,6 +1928,9 @@ def main():
     start_time = time.time()
     top1_recall = evaluator.evaluate()
     end_time = time.time()
+
+    # 输出消融实验汇总
+    evaluator.output_ablation_summary("B3a", param_value=20)
 
     print(f"\n评估完成!")
     print(f"总耗时: {end_time - start_time:.2f} 秒")
