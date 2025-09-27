@@ -206,11 +206,8 @@ class ContourManager:
         print("DEBUG: 轮廓排序和百分比计算完成")
 
         # 确保这些函数在方法末尾被调用
-        self._output_detailed_contour_statistics()
+        contour_stats = self._output_detailed_contour_statistics()  # 修改这行：接收返回值
         self._make_retrieval_keys()
-        # _make_retrieval_keys()中应该调用：
-        self._output_retrieval_key_statistics()
-        self._output_bci_statistics()
 
     def _make_contours_interval_based(self, cc_roi: Tuple[int, int, int, int]):
         """
@@ -344,19 +341,14 @@ class ContourManager:
 
         print(f"全部层-全部轮廓的key和bci已生成")
         # ===== 输出检索键统计信息 =====
-        print("DEBUG: 准备输出检索键统计")  # 添加这行
-        self._output_retrieval_key_statistics()
-        print("DEBUG: _output_retrieval_key_statistics() 执行完成")  # 添加这行
+        print("DEBUG: 准备输出检索键统计")
+        key_stats = self._output_retrieval_key_statistics()
+        print("DEBUG: _output_retrieval_key_statistics() 执行完成")
 
         # ===== BCI统计输出 =====
-        print("DEBUG: 准备输出BCI统计")  # 添加这行
-        self._output_bci_statistics()
-        print("DEBUG: _output_bci_statistics() 执行完成")  # 添加这行
-
-        # ===== 输出检索键统计信息 =====
-        self._output_retrieval_key_statistics()
-        # ===== BCI统计输出 =====
-        self._output_bci_statistics()
+        print("DEBUG: 准备输出BCI统计")
+        bci_stats = self._output_bci_statistics()
+        print("DEBUG: _output_bci_statistics() 执行完成")
 
     def _generate_ring_features(self, v_cen: np.ndarray, r_min: int, r_max: int,
                                 c_min: int, c_max: int, accumulate_cell_cnt: int,
@@ -364,7 +356,7 @@ class ContourManager:
         """生成环形特征"""
         key = np.zeros(RET_KEY_DIM, dtype=np.float32)
 
-        # 使用当前层级的轮廓
+        # 前3维：基础特征（特征值+面积）
         if (current_level < len(self.cont_views) and
                 current_seq < len(self.cont_views[current_level])):
             cont = self.cont_views[current_level][current_seq]
@@ -382,53 +374,104 @@ class ContourManager:
 
         key[2] = np.sqrt(accumulate_cell_cnt)
 
-        # 环形分布特征
-        num_bins = RET_KEY_DIM - 3
-        bin_len = self.cfg.roi_radius / num_bins
-        ring_bins = np.zeros(num_bins)
+        # 第4维及以上：环形分布特征（仅当RET_KEY_DIM > 3时计算）
+        if RET_KEY_DIM > 3:
+            # 计算实际需要的环形特征数量
+            max_ring_bins = 7  # 原始设计最多7个环形bins
+            available_dims = RET_KEY_DIM - 3  # 可用于环形特征的维度数
+            num_bins = min(available_dims, max_ring_bins)
 
-        div_per_bin = 5
-        discrete_divs = np.zeros(num_bins * div_per_bin)
-        div_len = self.cfg.roi_radius / (num_bins * div_per_bin)
-        cnt_point = 0
+            if num_bins > 0:
+                bin_len = self.cfg.roi_radius / num_bins
+                ring_bins = np.zeros(num_bins)
 
-        # 遍历ROI区域所有像素
-        for rr in range(r_min, r_max + 1):
-            for cc in range(c_min, c_max + 1):
-                # 检查是否在搜索半径内
-                q_hash = rr * self.cfg.n_col + cc
-                pixf = self._search_pixf(q_hash)
-                if not pixf:
-                    continue
+                div_per_bin = 5
+                discrete_divs = np.zeros(num_bins * div_per_bin)
+                div_len = self.cfg.roi_radius / (num_bins * div_per_bin)
+                cnt_point = 0
 
-                pos = np.array([pixf[0], pixf[1]])
-                dist = np.linalg.norm(pos - v_cen)
+                # 遍历ROI区域所有像素
+                for rr in range(r_min, r_max + 1):
+                    for cc in range(c_min, c_max + 1):
+                        # 检查是否在搜索半径内
+                        q_hash = rr * self.cfg.n_col + cc
+                        pixf = self._search_pixf(q_hash)
+                        if not pixf:
+                            continue
 
-                if dist < self.cfg.roi_radius - 1e-2:
-                    # 计算该位置有多少个层级存在结构
-                    higher_cnt = np.sum(self.layer_masks[rr, cc, :])
+                        pos = np.array([pixf[0], pixf[1]])
+                        dist = np.linalg.norm(pos - v_cen)
 
-                    # 如果该位置有任何层级的结构才参与计算
-                    if higher_cnt > 0:
-                        cnt_point += 1
+                        if dist < self.cfg.roi_radius - 1e-2:
+                            # 计算该位置有多少个层级存在结构
+                            higher_cnt = np.sum(self.layer_masks[rr, cc, :])
 
-                        # 使用高斯分布分配到bins
-                        for div_idx in range(num_bins * div_per_bin):
-                            center = div_idx * div_len + 0.5 * div_len
-                            discrete_divs[div_idx] += higher_cnt * gauss_pdf(center, dist, 1.0)
+                            # 如果该位置有任何层级的结构才参与计算
+                            if higher_cnt > 0:
+                                cnt_point += 1
 
-        # 合并bins
-        for b in range(num_bins):
-            for d in range(div_per_bin):
-                ring_bins[b] += discrete_divs[b * div_per_bin + d]
-            if cnt_point > 0:
-                ring_bins[b] *= bin_len / np.sqrt(cnt_point)
+                                # 使用高斯分布分配到bins
+                                for div_idx in range(num_bins * div_per_bin):
+                                    center = div_idx * div_len + 0.5 * div_len
+                                    discrete_divs[div_idx] += higher_cnt * gauss_pdf(center, dist, 1.0)
 
-        # 填充键的环形部分
-        key[3:3 + num_bins] = ring_bins
+                # 合并bins
+                for b in range(num_bins):
+                    for d in range(div_per_bin):
+                        ring_bins[b] += discrete_divs[b * div_per_bin + d]
+                    if cnt_point > 0:
+                        ring_bins[b] *= bin_len / np.sqrt(cnt_point)
+
+                # 填充键的环形部分（第4-10维或更少）
+                key[3:3 + num_bins] = ring_bins
+
+        # 扩展维度特征（用于12维、15维、20维实验）
+        if RET_KEY_DIM > 10:
+            extra_dims_needed = RET_KEY_DIM - 10
+
+            if (current_level < len(self.cont_views) and
+                    current_seq < len(self.cont_views[current_level])):
+                cont = self.cont_views[current_level][current_seq]
+
+                # 第11维：偏心率
+                if extra_dims_needed >= 1:
+                    key[10] = cont.eccen if hasattr(cont, 'eccen') else 0.0
+
+                # 第12维：平均高度
+                if extra_dims_needed >= 2:
+                    key[11] = cont.vol3_mean if hasattr(cont, 'vol3_mean') else 0.0
+
+                # 第13维：质心到几何中心距离
+                if extra_dims_needed >= 3:
+                    if hasattr(cont, 'com') and hasattr(cont, 'pos_mean'):
+                        key[12] = np.linalg.norm(cont.com - cont.pos_mean)
+                    else:
+                        key[12] = 0.0
+
+                # 第14维：轮廓复杂度（特征值比例）
+                if extra_dims_needed >= 4:
+                    if hasattr(cont, 'eig_vals') and cont.eig_vals[1] > 0:
+                        key[13] = cont.eig_vals[0] / cont.eig_vals[1]
+                    else:
+                        key[13] = 0.0
+
+                # 第15维：轮廓在层级中的相对大小
+                if extra_dims_needed >= 5:
+                    layer_total = sum(c.cell_cnt for c in self.cont_views[current_level])
+                    if layer_total > 0:
+                        key[14] = cont.cell_cnt / layer_total
+                    else:
+                        key[14] = 0.0
+
+                # 第16-20维：可以添加更多几何特征
+                remaining_dims = extra_dims_needed - 5
+                for i in range(remaining_dims):
+                    if i < 5:  # 最多再添加5个维度
+                        # 可以添加其他特征，这里先填0
+                        key[15 + i] = 0.0
 
         print(f"[KEY_DEBUG] {self.str_id} L{current_level}S{current_seq}: "
-              f"final_key[0]={key[0]:.6f}")
+              f"final_key[0]={key[0]:.6f}, RET_KEY_DIM={RET_KEY_DIM}")
 
         return key
 
@@ -734,18 +777,22 @@ class ContourManager:
                     (501, float('inf'), "超大轮廓")
                 ]
 
-                for min_size, max_size, label in size_bins:
-                    if max_size == float('inf'):
-                        count = sum(1 for s in contour_sizes if s >= min_size)
+                size_distribution = {}
+                for min_size_bin, max_size_bin, label in size_bins:
+                    if max_size_bin == float('inf'):
+                        count = sum(1 for s in contour_sizes if s >= min_size_bin)
                     else:
-                        count = sum(1 for s in contour_sizes if min_size <= s <= max_size)
+                        count = sum(1 for s in contour_sizes if min_size_bin <= s <= max_size_bin)
                     ratio = count / total_contours if total_contours > 0 else 0
+                    size_distribution[label] = ratio
 
                     size_dist_msg = f"CONTOUR_SIZE_DIST: {label}={count}({ratio:.3f})"
                     print(size_dist_msg)
                     logging.info(size_dist_msg)
 
                 # 几何特征统计
+                avg_ecc = 0
+                std_ecc = 0
                 if eccentricities:
                     avg_ecc = sum(eccentricities) / len(eccentricities)
                     std_ecc = statistics.stdev(eccentricities) if len(eccentricities) > 1 else 0
@@ -771,9 +818,10 @@ class ContourManager:
                         logging.info(ecc_dist_msg)
 
                 # 特征值比例
+                avg_eigenvalue_ratio = 0
                 if eigenvalue_ratios:
-                    avg_ratio = sum(eigenvalue_ratios) / len(eigenvalue_ratios)
-                    eigval_msg = f"CONTOUR_EIGENVALUE: avg_ratio={avg_ratio:.3f}"
+                    avg_eigenvalue_ratio = sum(eigenvalue_ratios) / len(eigenvalue_ratios)
+                    eigval_msg = f"CONTOUR_EIGENVALUE: avg_ratio={avg_eigenvalue_ratio:.3f}"
                     print(eigval_msg)
                     logging.info(eigval_msg)
 
@@ -787,6 +835,7 @@ class ContourManager:
                     logging.info(feat_msg)
 
                 # 高度统计
+                avg_height = 0
                 if heights:
                     avg_height = sum(heights) / len(heights)
                     height_msg = f"CONTOUR_HEIGHT: avg_height={avg_height:.2f}"
@@ -795,11 +844,52 @@ class ContourManager:
 
             print("DEBUG: _output_detailed_contour_statistics() 函数正常结束")
 
+            # 返回详细统计数据
+            return {
+                'total_contours': total_contours if contour_sizes else 0,
+                'tiny_contour_ratio': size_distribution.get("极小轮廓", 0),
+                'small_contour_ratio': size_distribution.get("小轮廓", 0),
+                'medium_small_contour_ratio': size_distribution.get("中小轮廓", 0),
+                'medium_contour_ratio': size_distribution.get("中等轮廓", 0),
+                'large_contour_ratio': size_distribution.get("大轮廓", 0),
+                'super_large_contour_ratio': size_distribution.get("超大轮廓", 0),
+                'avg_eccentricity': avg_ecc,
+                'std_eccentricity': std_ecc,
+                'significant_ecc_ratio': significant_ecc_count / total_contours if total_contours > 0 else 0,
+                'significant_com_ratio': significant_com_count / total_contours if total_contours > 0 else 0,
+                'avg_size': avg_size if contour_sizes else 0,
+                'std_size': std_size if contour_sizes else 0,
+                'min_size': min_size if contour_sizes else 0,
+                'max_size': max_size if contour_sizes else 0,
+                'avg_eigenvalue_ratio': avg_eigenvalue_ratio,
+                'avg_height': avg_height
+            }
+
         except Exception as e:
             error_msg = f"轮廓统计输出失败: {e}"
             print(error_msg)
             import logging
             logging.error(error_msg)
+            # 异常情况返回默认值
+            return {
+                'total_contours': 0,
+                'tiny_contour_ratio': 0,
+                'small_contour_ratio': 0,
+                'medium_small_contour_ratio': 0,
+                'medium_contour_ratio': 0,
+                'large_contour_ratio': 0,
+                'super_large_contour_ratio': 0,
+                'avg_eccentricity': 0,
+                'std_eccentricity': 0,
+                'significant_ecc_ratio': 0,
+                'significant_com_ratio': 0,
+                'avg_size': 0,
+                'std_size': 0,
+                'min_size': 0,
+                'max_size': 0,
+                'avg_eigenvalue_ratio': 0,
+                'avg_height': 0
+            }
 
     def _output_retrieval_key_statistics(self):
         """输出检索键特征统计信息到日志"""
@@ -830,6 +920,7 @@ class ContourManager:
 
             # 输出统计信息
             import logging
+            import statistics
 
             # 基本维度统计
             if key_stats['dim0']:
@@ -872,15 +963,16 @@ class ContourManager:
             if total_keys > 0:
                 sparsity = key_stats['zero_keys'] / total_keys
                 valid_keys = total_keys - key_stats['zero_keys']
-
+                # 解释: 统计所有生成的检索键中，有多少个是零向量（即np.sum(key) == 0
+                # 的键）。稀疏度 = 零向量数量 ÷ 总键数量。稀疏度越高说明有效特征越少。
                 sparse_msg = f"KEY_SPARSITY: total_keys={total_keys}, zero_keys={key_stats['zero_keys']}, sparsity={sparsity:.4f}, valid_keys={valid_keys}"
                 print(sparse_msg)
                 logging.info(sparse_msg)
 
             # 环形特征统计
             if ring_activations:
-                import statistics
-                avg_activation = statistics.mean(ring_activations)
+                avg_activation = statistics.mean(ring_activations)# 所有激活环形特征的平均值，环形特征提取位置:_generate_ring_features() 函数
+                # 解释：检索键的第4-10维是环形特征，表示不同半径环上的结构密度。环形激活是所有非零环形特征值的平均值，反映局部空间结构的丰富度。
                 std_activation = statistics.stdev(ring_activations) if len(ring_activations) > 1 else 0
                 max_activation = max(ring_activations)
 
@@ -888,6 +980,7 @@ class ContourManager:
                 print(ring_msg)
                 logging.info(ring_msg)
             else:
+                avg_activation = 0.0
                 ring_msg = f"KEY_RING_FEATURES: avg_activation=0.0000, std_activation=0.0000, max_activation=0.0000, active_count=0"
                 print(ring_msg)
                 logging.info(ring_msg)
@@ -897,18 +990,31 @@ class ContourManager:
                 quality_score = (1.0 - sparsity) * 0.5
                 if ring_activations:
                     quality_score += min(0.5, len(ring_activations) / (total_keys * 7) * 0.5)  # 假设每个key有7个ring features
-
+                # 解释: 质量得分由两部分组成：(1 - 稀疏度) × 0.5 + 环形特征激活度贡献。满分1.0，越高表示特征表达能力越强。
                 quality_msg = f"KEY_QUALITY: quality_score={quality_score:.4f}"
                 print(quality_msg)
                 logging.info(quality_msg)
+            else:
+                quality_score = 0.0
 
             print("DEBUG: _output_retrieval_key_statistics() 函数正常结束")
+
+            return {
+                'sparsity_ratio': sparsity if total_keys > 0 else 0,
+                'quality_score': quality_score,
+                'ring_activation': avg_activation
+            }
 
         except Exception as e:
             error_msg = f"检索键统计输出失败: {e}"
             print(error_msg)
             import logging
             logging.error(error_msg)
+            return {
+                'sparsity_ratio': 0,
+                'quality_score': 0,
+                'ring_activation': 0
+            }
 
     def _output_bci_statistics(self):
         """输出BCI特征统计信息到日志"""
@@ -921,7 +1027,7 @@ class ContourManager:
             total_connections = 0
             distance_bits_activated = 0
             total_distance_bits = 0
-            layer_connectivity = {}  # 记录每层的连接统计
+            layer_connectivity = {}
 
             # 收集所有BCI的信息
             for ll in range(len(self.layer_key_bcis)):
@@ -930,7 +1036,7 @@ class ContourManager:
 
                 for bci in self.layer_key_bcis[ll]:
                     # 邻居数量
-                    neighbor_count = len(bci.nei_pts)
+                    neighbor_count = len(bci.nei_pts) # 每个BCI的邻居轮廓数量，邻居生成位置: _generate_bci() 函数
                     bci_neighbors.append(neighbor_count)
                     layer_connections += neighbor_count
 
@@ -963,8 +1069,12 @@ class ContourManager:
             # 基本BCI统计
             total_bcis = len([bci for bcis in self.layer_key_bcis for bci in bcis])
 
+            avg_neighbors = 0
+            std_neighbors = 0
+            min_neighbors = 0
+            max_neighbors = 0
             if bci_neighbors:
-                avg_neighbors = statistics.mean(bci_neighbors)
+                avg_neighbors = statistics.mean(bci_neighbors)# 所有BCI邻居数的平均值
                 std_neighbors = statistics.stdev(bci_neighbors) if len(bci_neighbors) > 1 else 0
                 min_neighbors = min(bci_neighbors)
                 max_neighbors = max(bci_neighbors)
@@ -989,6 +1099,10 @@ class ContourManager:
                     logging.info(neighbor_dist_msg)
 
             # 距离统计
+            avg_distance = 0
+            std_distance = 0
+            min_distance = 0
+            max_distance = 0
             if neighbor_distances:
                 avg_distance = statistics.mean(neighbor_distances)
                 std_distance = statistics.stdev(neighbor_distances) if len(neighbor_distances) > 1 else 0
@@ -1000,6 +1114,8 @@ class ContourManager:
                 logging.info(distance_msg)
 
             # 角度多样性统计
+            angle_diversity = 0
+            angle_uniformity = 0
             if neighbor_angles:
                 # 角度分布统计 (将角度转换到0-2π范围)
                 normalized_angles = [(angle + 2 * np.pi) % (2 * np.pi) for angle in neighbor_angles]
@@ -1019,6 +1135,7 @@ class ContourManager:
                 logging.info(angle_msg)
 
             # 跨层连接统计
+            cross_layer_ratio = 0
             if total_connections > 0:
                 cross_layer_ratio = cross_layer_connections / total_connections
                 intra_layer_connections = total_connections - cross_layer_connections
@@ -1028,6 +1145,7 @@ class ContourManager:
                 logging.info(cross_layer_msg)
 
             # 距离位激活统计
+            activation_rate = 0
             if total_distance_bits > 0:
                 activation_rate = distance_bits_activated / total_distance_bits
 
@@ -1035,22 +1153,12 @@ class ContourManager:
                 print(bit_msg)
                 logging.info(bit_msg)
 
-            # 每层连接统计
-            for layer, stats in layer_connectivity.items():
-                if stats['bcis_count'] > 0:
-                    avg_conn_per_layer = stats['total_connections'] / stats['bcis_count']
-                    cross_ratio_per_layer = stats['cross_layer_connections'] / max(1, stats['total_connections'])
-
-                    layer_msg = f"BCI_LAYER_{layer}: bcis={stats['bcis_count']}, avg_connections={avg_conn_per_layer:.1f}, cross_layer_ratio={cross_ratio_per_layer:.3f}"
-                    print(layer_msg)
-                    logging.info(layer_msg)
-
             # 星座复杂度计算
             constellation_complexity = 0.0
             if bci_neighbors and neighbor_angles:
-                avg_neighbors = statistics.mean(bci_neighbors)
-                angle_diversity = statistics.stdev(normalized_angles) if len(normalized_angles) > 1 else 0
-                constellation_complexity = avg_neighbors * angle_diversity / 10.0  # 归一化到0-1范围
+                avg_neighbors_calc = statistics.mean(bci_neighbors)# 平均邻居数
+                angle_diversity_calc = statistics.stdev(normalized_angles) if len(normalized_angles) > 1 else 0# 角度多样性
+                constellation_complexity = avg_neighbors_calc * angle_diversity_calc / 10.0# 复杂度 = 邻居数 × 角度多样性 / 10
 
             complexity_msg = f"BCI_CONSTELLATION_COMPLEXITY: complexity_score={constellation_complexity:.3f}"
             print(complexity_msg)
@@ -1069,12 +1177,60 @@ class ContourManager:
 
             print("DEBUG: _output_bci_statistics() 函数正常结束")
 
+            # 返回详细统计数据
+            return {
+                'avg_neighbors': avg_neighbors,
+                'std_neighbors': std_neighbors,
+                'min_neighbors': min_neighbors,
+                'max_neighbors': max_neighbors,
+                'neighbor_dist_0': neighbor_distribution.get('0_neighbors', 0) / total_bcis if total_bcis > 0 else 0,
+                'neighbor_dist_1_3': neighbor_distribution.get('1-3_neighbors',
+                                                               0) / total_bcis if total_bcis > 0 else 0,
+                'neighbor_dist_4_6': neighbor_distribution.get('4-6_neighbors',
+                                                               0) / total_bcis if total_bcis > 0 else 0,
+                'neighbor_dist_7_10': neighbor_distribution.get('7-10_neighbors',
+                                                                0) / total_bcis if total_bcis > 0 else 0,
+                'neighbor_dist_10_plus': neighbor_distribution.get('10+_neighbors',
+                                                                   0) / total_bcis if total_bcis > 0 else 0,
+                'avg_distance': avg_distance,
+                'std_distance': std_distance,
+                'min_distance': min_distance,
+                'max_distance': max_distance,
+                'angle_diversity': angle_diversity,
+                'angle_uniformity': angle_uniformity,
+                'cross_layer_ratio': cross_layer_ratio,
+                'activation_rate': activation_rate,
+                'constellation_complexity': constellation_complexity,
+                'connection_quality': connection_quality
+            }
+
         except Exception as e:
             error_msg = f"BCI统计输出失败: {e}"
             print(error_msg)
             import logging
             logging.error(error_msg)
-
+            # 异常情况返回默认值
+            return {
+                'avg_neighbors': 0,
+                'std_neighbors': 0,
+                'min_neighbors': 0,
+                'max_neighbors': 0,
+                'neighbor_dist_0': 0,
+                'neighbor_dist_1_3': 0,
+                'neighbor_dist_4_6': 0,
+                'neighbor_dist_7_10': 0,
+                'neighbor_dist_10_plus': 0,
+                'avg_distance': 0,
+                'std_distance': 0,
+                'min_distance': 0,
+                'max_distance': 0,
+                'angle_diversity': 0,
+                'angle_uniformity': 0,
+                'cross_layer_ratio': 0,
+                'activation_rate': 0,
+                'constellation_complexity': 0,
+                'connection_quality': 0
+            }
 
 def umeyama_2d(src_points: np.ndarray, dst_points: np.ndarray) -> np.ndarray:
     """
