@@ -11,11 +11,22 @@ import yaml
 
 # 常量定义
 BITS_PER_LAYER = 20
-DIST_BIN_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 用于生成距离键和形成星座的层
-LAYER_AREA_WEIGHTS = [0.05, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.1, 0.1]  # 计算归一化"使用区域百分比"时每层的权重
-# BITS_PER_LAYER = 20
-# DIST_BIN_LAYERS = [0, 1, 2, 3, 4]  # 用于生成距离键和形成星座的层
-# LAYER_AREA_WEIGHTS = [0.1, 0.2, 0.3, 0.2, 0.2]  # 计算归一化"使用区
+# 10层配置时
+# DIST_BIN_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 用于生成距离键和形成星座的层
+# LAYER_AREA_WEIGHTS = [0.05, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.1, 0.1]  # 计算归一化"使用区域百分比"时每层的权重
+
+# 5层配置时
+# DIST_BIN_LAYERS = [0, 1, 2, 3, 4]  # 所有层级
+# LAYER_AREA_WEIGHTS = [0.1, 0.2, 0.4, 0.2, 0.1]  # 5个权重
+
+# 15层配置时
+# DIST_BIN_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]  # 所有层级
+# LAYER_AREA_WEIGHTS = [0.03, 0.03, 0.05, 0.05, 0.07, 0.07, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.07, 0.05, 0.03]  # 15个权重，中间层级权重更高
+
+# 8层配置时
+DIST_BIN_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7]  # 所有层级
+LAYER_AREA_WEIGHTS = [0.08, 0.1, 0.12, 0.15, 0.2, 0.15, 0.12, 0.08]  # 8个权重
+
 NUM_BIN_KEY_LAYER = len(DIST_BIN_LAYERS)
 RET_KEY_DIM = 10  # 检索键维度
 
@@ -45,7 +56,7 @@ class TreeBucketConfig:
 @dataclass
 class ContourManagerConfig:
     """轮廓管理器配置"""
-    lv_grads: List[float] = field(default_factory=lambda: [1.5, 2, 2.5, 3, 3.5, 4])
+    lv_grads: List[float] = field(default_factory=lambda: [0.0, 1.25, 2.5, 3.75, 5.0])
     reso_row: float = 1.0
     reso_col: float = 1.0
     n_row: int = 150
@@ -63,7 +74,7 @@ class ContourDBConfig:
     """轮廓数据库配置"""
     nnk: int = 50
     max_fine_opt: int = 10
-    q_levels: List[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    q_levels: List[int] = field(default_factory=lambda: [0, 1, 2, 3])  # 改为全部10层
     cont_sim_cfg: ContourSimThresConfig = field(default_factory=ContourSimThresConfig)
     tb_cfg: TreeBucketConfig = field(default_factory=TreeBucketConfig)
 
@@ -158,11 +169,11 @@ class ConstellationPair:
 @dataclass
 class RelativePoint:
     """BCI中的相对点"""
-    level: int
-    seq: int
-    bit_pos: int
-    r: float
-    theta: float
+    level: int# 邻居轮廓所在层级
+    seq: int# 邻居轮廓序号
+    bit_pos: int# 在距离位串中的位置
+    r: float# 到中心轮廓的距离
+    theta: float# 相对于中心轮廓的角度
 
 @dataclass
 class DistSimPair:
@@ -177,11 +188,11 @@ class BCI:
     """二进制星座标识"""
 
     def __init__(self, seq: int, level: int):
-        self.piv_seq = seq
-        self.level = level
-        self.dist_bin = np.zeros(BITS_PER_LAYER * NUM_BIN_KEY_LAYER, dtype=bool)
-        self.nei_pts: List[RelativePoint] = []
-        self.nei_idx_segs: List[int] = []
+        self.piv_seq = seq# 中心轮廓序号
+        self.level = level# 所属层级
+        self.dist_bin = np.zeros(BITS_PER_LAYER * NUM_BIN_KEY_LAYER, dtype=bool)# 距离二进制位串 (20位×20层=400位)
+        self.nei_pts: List[RelativePoint] = []# 邻居轮廓详细信息列表
+        self.nei_idx_segs: List[int] = []# 按距离分组的索引段
 
     @staticmethod
     def check_constell_sim(src: 'BCI', tgt: 'BCI', lb: 'ScoreConstellSim',
