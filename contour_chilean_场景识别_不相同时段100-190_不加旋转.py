@@ -1037,7 +1037,7 @@ class ChileanContourEvaluator:
 
         # report_lines.append(f"\n实验{experiment_name}: min_cont_cell_cnt消融实验")  # B1
         # report_lines.append(f"\n实验{experiment_name}: min_cont_key_cnt消融实验")   # B2
-        report_lines.append(f"\n实验{experiment_name}: piv_firsts消融实验")        # B3a
+        report_lines.append(f"\n实验{experiment_name}: piv_firsts消融实验")        # D2
         # report_lines.append(f"\n实验{experiment_name}: dist_firsts消融实验")       # B3b
 
         report_lines.append("=" * 40)
@@ -1930,7 +1930,7 @@ def main():
     end_time = time.time()
 
     # 输出消融实验汇总
-    evaluator.output_ablation_summary("B3a", param_value=20)
+    evaluator.output_ablation_summary("D2", param_value=20)
 
     print(f"\n评估完成!")
     print(f"总耗时: {end_time - start_time:.2f} 秒")
