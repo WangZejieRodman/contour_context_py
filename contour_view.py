@@ -49,22 +49,22 @@ class ContourView:
             rec: 运行统计记录器
             cfg: 轮廓视图统计配置
         """
-        self.cell_cnt = rec.cell_cnt
-        self.pos_mean = (rec.cell_pos_sum / rec.cell_cnt).astype(np.float32)
+        self.cell_cnt = rec.cell_cnt# 像素总数
+        self.pos_mean = (rec.cell_pos_sum / rec.cell_cnt).astype(np.float32)# 质心
 
-        self.vol3_mean = rec.cell_vol3 / rec.cell_cnt
-        self.com = (rec.cell_vol3_torq / rec.cell_vol3).astype(np.float32)
+        self.vol3_mean = rec.cell_vol3 / rec.cell_cnt# 平均高度
+        self.com = (rec.cell_vol3_torq / rec.cell_vol3).astype(np.float32)# 重心
 
         # 计算偏心率
-        if rec.cell_cnt < cfg.min_cell_cov:
-            self.pos_cov = np.eye(2) * cfg.point_sigma * cfg.point_sigma
-            self.eig_vals = np.array([cfg.point_sigma, cfg.point_sigma])
+        if rec.cell_cnt < cfg.min_cell_cov:#当轮廓像素数量不足以可靠地估计协方差矩阵
+            self.pos_cov = np.eye(2) * cfg.point_sigma * cfg.point_sigma #协方差矩阵为 [[1, 0], [0, 1]]
+            self.eig_vals = np.array([cfg.point_sigma, cfg.point_sigma])# 两个相等的特征值，表示圆形分布
             self.eig_vecs = np.eye(2)
             self.ecc_feat = False
             self.com_feat = False
         else:
             # 计算协方差矩阵
-            mean_outer = np.outer(self.pos_mean, self.pos_mean)
+            mean_outer = np.outer(self.pos_mean, self.pos_mean)#计算均值的外积 μμᵀ，用于协方差公式
             self.pos_cov = ((rec.cell_pos_tss.astype(np.float32) -
                              mean_outer * rec.cell_cnt) / (rec.cell_cnt - 1))
 
