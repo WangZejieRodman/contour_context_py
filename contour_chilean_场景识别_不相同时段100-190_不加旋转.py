@@ -23,7 +23,7 @@ from contour_types import (
     ContourManagerConfig, ContourDBConfig, CandidateScoreEnsemble,
     ContourSimThresConfig, TreeBucketConfig
 )
-from contour_manager_区间分割_垂直结构复杂度 import ContourManager
+from contour_manager_区间分割_垂直结构复杂度_BCI邻域搜索层数_BCI分bin数 import ContourManager
 from contour_database import ContourDB
 
 
@@ -193,16 +193,37 @@ class ChileanContourEvaluator:
 
         # 根据Chilean地下矿井环境调整参数
         config.lv_grads = [0.0, 0.625, 1.25, 1.875, 2.5, 3.125, 3.75, 4.375, 5.0]  # 高度阈值
-        config.reso_row = 0.2  # 提高分辨率
+
+        # # 0.1m分辨率配置
+        # config.reso_row = 0.1
+        # config.reso_col = 0.1
+        # config.n_row = 400
+        # config.n_col = 400
+
+        # 0.2m分辨率配置（基线）
+        config.reso_row = 0.2
         config.reso_col = 0.2
-        config.n_row = 200  # 增大网格以适应地下环境
+        config.n_row = 200
         config.n_col = 200
+
+        # # 0.4m分辨率配置（基线）
+        # config.reso_row = 0.4
+        # config.reso_col = 0.4
+        # config.n_row = 100
+        # config.n_col = 100
+
+        # # 0.5m分辨率配置
+        # config.reso_row = 0.5
+        # config.reso_col = 0.5
+        # config.n_row = 80
+        # config.n_col = 80
+
         config.lidar_height = 0.0  # 地下环境激光雷达高度较低
         config.blind_sq = 0.0  # 减小盲区
         config.min_cont_key_cnt = 1  # 降低最小轮廓键 像素数量
         config.min_cont_cell_cnt = 1  # 降低最小轮廓 像素数量
-        config.piv_firsts = 20  # 检索键生成数量
-        config.dist_firsts = 12  #BCI邻居搜索范围
+        config.piv_firsts = 12  # 检索键生成数量，每层搜索前piv_firsts个轮廓生成检索键
+        config.dist_firsts = 12  # BCI邻居搜索范围，每层搜索前dist_firsts个轮廓作为潜在邻居
         config.roi_radius = 15.0  # 增大感兴趣区域半径
 
         return config
@@ -967,7 +988,7 @@ class ChileanContourEvaluator:
         # 保存详细结果
         self.save_results(ave_recall, average_similarity, ave_one_percent_recall)
 
-        return ave_one_percent_recall
+        return ave_recall[0]
 
     def save_results(self, ave_recall: np.ndarray, average_similarity: float,
                      ave_one_percent_recall: float):
@@ -1026,7 +1047,7 @@ class ChileanContourEvaluator:
             prefix = f"specified_sample_index_{key}"
             self.visualizer.visualize_pointcloud_pipeline(cm, pointcloud, prefix)
 
-    def output_ablation_summary(self, experiment_name: str, param_value):
+    def output_ablation_summary(self, experiment_name: str, param_value, top1_recall):
         """输出消融实验汇总"""
 
         # 创建专门的消融实验报告文件
@@ -1037,13 +1058,90 @@ class ChileanContourEvaluator:
 
         # report_lines.append(f"\n实验{experiment_name}: min_cont_cell_cnt消融实验")  # B1
         # report_lines.append(f"\n实验{experiment_name}: min_cont_key_cnt消融实验")   # B2
-        report_lines.append(f"\n实验{experiment_name}: piv_firsts消融实验")        # D2
-        # report_lines.append(f"\n实验{experiment_name}: dist_firsts消融实验")       # B3b
+        # report_lines.append(f"\n实验{experiment_name}: piv_firsts消融实验")        # D2
+        # report_lines.append(f"\n实验{experiment_name}: dist_firsts消融实验")       # D3
+        # report_lines.append(f"\n实验{experiment_name}: nnk消融实验")  # G1
+        # report_lines.append(f"\n实验{experiment_name}: 精细优化候选数量max_fine_opt消融实验")  # H2
+        # report_lines.append(f"\n实验{experiment_name}: 空间分辨率消融实验")  # I1
+        # report_lines.append(f"\n实验{experiment_name}: ROI半径roi_radius消融实验")  # C3
+        # report_lines.append(f"\n实验{experiment_name}: 检索键维度影响（3维 vs 5维 vs 7维 vs 10维 ）消融实验")  # C1
+        # report_lines.append(f"\n实验{experiment_name}: 垂直结构复杂度消融实验")  # C4
+        # report_lines.append(f"\n实验{experiment_name}: BCI邻域搜索层级范围消融实验")  # D1
+        # report_lines.append(f"\n实验{experiment_name}: BCI分bin数量消融实验")  # D4
+        report_lines.append(f"\n实验{experiment_name}: BCI角度一致性检查的角度阈值消融实验")  # D5
 
         report_lines.append("=" * 40)
         report_lines.append(f"参数设置: {param_value}")
+
+        # ✅ 新增：D5实验显示角度信息
+        if experiment_name == "D5":
+            angle_deg = np.degrees(param_value)
+            report_lines.append(f"角度阈值: {param_value:.4f} rad ({angle_deg:.2f}°)")
+
         report_lines.append("基线配置: 8层, 高度0-5m, 层间距0.625m")
 
+        # ✅ 新增：星座相似性检查详细统计（在轮廓统计之前）
+        if experiment_name == "D5":
+            from contour_types import CONSTELL_CHECK_STATS
+
+            report_lines.append("\n" + "=" * 60)
+            report_lines.append("星座相似性检查详细统计（验证原因1和原因2）")
+            report_lines.append("=" * 60)
+
+            stats = CONSTELL_CHECK_STATS
+
+            if stats.total_calls > 0:
+                # 原因1验证：各阶段过滤统计
+                report_lines.append("\n【原因1验证】各阶段过滤统计:")
+                report_lines.append(f"  • 总调用次数: {stats.total_calls}")
+                overlap_pct = stats.filtered_by_overlap / stats.total_calls * 100
+                angle_pct = stats.filtered_by_angle / stats.total_calls * 100
+                passed_pct = stats.passed / stats.total_calls * 100
+                report_lines.append(f"  • 位重叠过滤: {stats.filtered_by_overlap} ({overlap_pct:.2f}%)")
+                report_lines.append(f"  • 角度一致性过滤: {stats.filtered_by_angle} ({angle_pct:.2f}%)")
+                report_lines.append(f"  • 通过检查: {stats.passed} ({passed_pct:.2f}%)")
+
+                # 验证一致性
+                total_accounted = stats.filtered_by_overlap + stats.filtered_by_angle + stats.passed
+                report_lines.append(f"  • 统计一致性检查: {total_accounted} / {stats.total_calls}")
+
+                # 原因2验证：角度差异分布
+                angle_dist = stats.get_angle_distribution()
+
+                if angle_dist and angle_dist['total_pairs'] > 0:
+                    report_lines.append("\n【原因2验证】通过位重叠后的角度差异分布:")
+                    report_lines.append(f"  • 总配对数: {angle_dist['total_pairs']}")
+                    report_lines.append(f"  • 平均角度差异: {angle_dist['mean']:.2f}° ± {angle_dist['std']:.2f}°")
+                    report_lines.append(f"  • 中位数: {angle_dist['median']:.2f}°")
+                    report_lines.append(f"\n  角度差异范围分布:")
+                    report_lines.append(f"    - <1°:  {angle_dist['less_1deg']:.1f}%")
+                    report_lines.append(f"    - <3°:  {angle_dist['less_3deg']:.1f}%")
+                    report_lines.append(f"    - <5°:  {angle_dist['less_5deg']:.1f}%")
+                    report_lines.append(f"    - <10°: {angle_dist['less_10deg']:.1f}%")
+                    report_lines.append(f"    - <20°: {angle_dist['less_20deg']:.1f}%")
+                    report_lines.append(f"    - ≥20°: {angle_dist['greater_20deg']:.1f}%")
+
+                    # 关键判断
+                    report_lines.append(f"\n  【关键判断】")
+                    if angle_dist['less_3deg'] > 80:
+                        report_lines.append(f"    ✓ 原因2成立：{angle_dist['less_3deg']:.1f}% 的配对角度差异<3°")
+                        report_lines.append(f"      说明Chilean环境结构高度规整，真实匹配天然角度一致")
+                    else:
+                        report_lines.append(f"    ✗ 原因2不成立：只有{angle_dist['less_3deg']:.1f}% 的配对<3°")
+
+                    if overlap_pct > 70:
+                        report_lines.append(f"    ✓ 原因1成立：{overlap_pct:.1f}% 在位重叠阶段被过滤")
+                        report_lines.append(f"      说明位重叠是主要过滤机制")
+                    else:
+                        report_lines.append(f"    ✗ 原因1不完全成立：只有{overlap_pct:.1f}% 在位重叠过滤")
+                else:
+                    report_lines.append("\n【原因2验证】无角度差异数据")
+            else:
+                report_lines.append("\n星座相似性检查统计：无数据")
+
+            report_lines.append("\n" + "=" * 60)
+
+        # 以下是原有内容，保持不变
         report_lines.append("\n轮廓统计:")
         if self.contour_stats['total_contours']:
             avg_total_contours = np.mean(self.contour_stats['total_contours'])
@@ -1096,6 +1194,15 @@ class ChileanContourEvaluator:
             report_lines.append("- 特征质量统计数据为空")
 
         report_lines.append("\nBCI连接:")
+
+        if experiment_name == "D4":
+            min_dist = 1.0
+            max_dist = 20.0  # 假设使用固定范围方案
+            bin_width = (max_dist - min_dist) / param_value
+            report_lines.append(f"Bin宽度: {bin_width:.3f}米")
+            report_lines.append(f"Bin数量: {param_value:.1f}")
+            report_lines.append(f"距离范围: {min_dist:.1f}-{max_dist:.1f}米")
+
         if self.bci_stats['avg_neighbors']:
             avg_neighbors = np.mean(self.bci_stats['avg_neighbors'])
             std_neighbors = np.mean(self.bci_stats['std_neighbors'])
@@ -1149,6 +1256,9 @@ class ChileanContourEvaluator:
                 report_lines.append(f"- 成对相似性通过率: {check3_rate:.1f}%")
         else:
             report_lines.append("- 相似性检查统计数据为空")
+
+        if top1_recall is not None:
+            report_lines.append(f"Top 1 Recall: {top1_recall:.2f}%")
 
         # 同时输出到控制台和文件
         for line in report_lines:
@@ -1904,6 +2014,12 @@ def main():
     print(f"当前工作目录: {os.getcwd()}")
     print("-" * 60)
 
+    # 重置星座相似性检查统计
+    from contour_types import CONSTELL_CHECK_STATS
+    CONSTELL_CHECK_STATS.reset()
+    print("已重置星座相似性检查统计")
+    print("-" * 60)
+
     # 创建评估器
     evaluator = ChileanContourEvaluator(
         dataset_folder=dataset_folder,
@@ -1911,15 +2027,16 @@ def main():
         query_file=query_file,
         log_file=log_file
     )
+    evaluator.cm_config.use_vertical_complexity = True #是否启用垂直结构复杂度
+    evaluator.cm_config.neighbor_layer_range = 7 #BCI邻域搜索：neighbor_layer_range = 0（仅本层）， 1（本层±1）...，7（本层±7）； 对于8层配置，neighbor_layer_range=7是上限， 在contour_types.py里修改
+    evaluator.cm_config.angular_consistency_threshold = np.pi / 16
 
-    # ✅ 添加：执行可视化（在评估之前）
+    # 执行可视化（在评估之前）
     print("=" * 60)
     print("开始可视化分析...")
     print("=" * 60)
-
     # 可视化（现在会显示区间信息）
     evaluator.visualize_sample_cases()  # 先测试一个
-
     print("=" * 60)
     print("可视化完成，开始正常评估...")
     print("=" * 60)
@@ -1930,11 +2047,11 @@ def main():
     end_time = time.time()
 
     # 输出消融实验汇总
-    evaluator.output_ablation_summary("D2", param_value=20)
+    evaluator.output_ablation_summary("D5", param_value=np.pi / 16, top1_recall=top1_recall)
 
     print(f"\n评估完成!")
     print(f"总耗时: {end_time - start_time:.2f} 秒")
-    print(f"最终Top 1% Recall: {top1_recall:.2f}%")
+    print(f"最终Top 1 Recall: {top1_recall:.2f}%")
     print(f"详细日志已保存到: {log_file}")
 
 
