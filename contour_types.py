@@ -10,7 +10,8 @@ from enum import Enum
 import yaml
 
 # 常量定义
-BITS_PER_LAYER = 20
+BITS_PER_LAYER = 20 #BCI分bin数  1 3 5 10 15 20 30 40
+
 # 10层配置时
 # DIST_BIN_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 用于生成距离键和形成星座的层
 # LAYER_AREA_WEIGHTS = [0.05, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.1, 0.1]  # 计算归一化"使用区域百分比"时每层的权重
@@ -68,6 +69,10 @@ class ContourManagerConfig:
     piv_firsts: int = 6
     dist_firsts: int = 10
     roi_radius: float = 10.0
+    use_vertical_complexity: bool = True # 垂直结构复杂度开关
+    neighbor_layer_range: int = 7  # 8层配置时，邻居搜索的层级范围（±N层）0=仅本层, 1=本层±1, 2=本层±2, ..., 7=本层±7
+    angular_consistency_threshold: float = np.pi / 16  # 角度一致性阈值（弧度）默认 π/16 ≈ 0.196 rad ≈ 11.25°
+
 
 @dataclass
 class ContourDBConfig:
@@ -196,7 +201,8 @@ class BCI:
 
     @staticmethod
     def check_constell_sim(src: 'BCI', tgt: 'BCI', lb: 'ScoreConstellSim',
-                           constell_res: List['ConstellationPair']) -> 'ScoreConstellSim':
+                           constell_res: List['ConstellationPair'],
+                           angular_threshold: float = np.pi / 16) -> 'ScoreConstellSim':
         """
         检查两个BCI的星座相似性
 
@@ -205,6 +211,7 @@ class BCI:
             tgt: 目标BCI
             lb: 下界阈值
             constell_res: 输出的星座对结果
+            angular_threshold: 角度一致性阈值（弧度）
 
         Returns:
             相似性分数
@@ -212,6 +219,10 @@ class BCI:
         assert src.level == tgt.level, "BCI层级必须相同"
 
         from contour_types import ScoreConstellSim, ConstellationPair, DistSimPair
+
+        # ✅ 统计：总调用次数
+        global CONSTELL_CHECK_STATS
+        CONSTELL_CHECK_STATS.total_calls += 1
 
         # 1. 计算位重叠
         and1 = src.dist_bin & tgt.dist_bin
@@ -235,9 +246,11 @@ class BCI:
 
         # 如果重叠不足，直接返回
         if ovlp_sum < lb.i_ovlp_sum or max_one < lb.i_ovlp_max_one:
+            # ✅ 统计：位重叠过滤
+            CONSTELL_CHECK_STATS.filtered_by_overlap += 1
             return ret
 
-        # 2. 角度一致性检查
+        # 2. 角度一致性检查 - 生成潜在配对
         potential_pairs: List[DistSimPair] = []
 
         # 遍历目标的相邻点段
@@ -268,22 +281,29 @@ class BCI:
                         orie_diff = rp2.theta - rp1.theta
                         potential_pairs.append(DistSimPair(rp1.level, rp1.seq, rp2.seq, orie_diff))
 
-        # 3. 角度一致性检查
-        # 规范化角度差到[-π, π]
+                        # ✅ 统计：收集角度差异（在归一化之前先记录）
+                        # 注意：这里暂不记录，等归一化后再记录
+
+        # 3. 规范化角度差到[-π, π]并收集统计
         for pair in potential_pairs:
             pair.orie_diff = clamp_angle(pair.orie_diff)
+            # ✅ 统计：收集角度差异（归一化后）
+            angle_deg = abs(np.degrees(pair.orie_diff))
+            CONSTELL_CHECK_STATS.angle_diffs.append(angle_deg)
 
         # 按角度差排序
         potential_pairs.sort(key=lambda x: x.orie_diff)
 
         # 找到最长的角度一致范围
-        angular_range = np.pi / 16  # 0.2 rad, 11度
+        angular_range = angular_threshold  # 使用传入的角度阈值
         longest_in_range_beg = 0
         longest_in_range = 1
         pot_sz = len(potential_pairs)
 
         if pot_sz == 0:
             ret.i_in_ang_rng = 0
+            # ✅ 统计：配对数为0（算作角度过滤）
+            CONSTELL_CHECK_STATS.filtered_by_angle += 1
             return ret
 
         p1 = 0
@@ -308,7 +328,12 @@ class BCI:
 
         # 如果角度范围内的对数不足，返回
         if longest_in_range < lb.i_in_ang_rng:
+            # ✅ 统计：角度一致性过滤
+            CONSTELL_CHECK_STATS.filtered_by_angle += 1
             return ret
+
+        # ✅ 统计：通过所有检查
+        CONSTELL_CHECK_STATS.passed += 1
 
         # 4. 构建结果星座对
         constell_res.clear()
@@ -372,3 +397,47 @@ def diff_delt(num1: float, num2: float, delta: float) -> bool:
 def gauss_pdf(x: float, mean: float, sd: float) -> float:
     """高斯概率密度函数"""
     return np.exp(-0.5 * ((x - mean) / sd) ** 2) / np.sqrt(2 * np.pi * sd * sd)
+
+
+class ConstellationCheckStats:
+    """星座相似性检查统计"""
+
+    def __init__(self):
+        self.total_calls = 0  # 总调用次数
+        self.filtered_by_overlap = 0  # 位重叠过滤次数
+        self.filtered_by_angle = 0  # 角度一致性过滤次数
+        self.passed = 0  # 通过次数
+        self.angle_diffs = []  # 角度差异列表（度）
+
+    def reset(self):
+        """重置统计"""
+        self.total_calls = 0
+        self.filtered_by_overlap = 0
+        self.filtered_by_angle = 0
+        self.passed = 0
+        self.angle_diffs = []
+
+    def get_angle_distribution(self):
+        """获取角度差异分布"""
+        if not self.angle_diffs:
+            return {}
+
+        import numpy as np
+        diffs = np.array(self.angle_diffs)
+
+        return {
+            'total_pairs': len(diffs),
+            'mean': np.mean(diffs),
+            'std': np.std(diffs),
+            'median': np.median(diffs),
+            'less_1deg': np.sum(diffs < 1.0) / len(diffs) * 100,
+            'less_3deg': np.sum(diffs < 3.0) / len(diffs) * 100,
+            'less_5deg': np.sum(diffs < 5.0) / len(diffs) * 100,
+            'less_10deg': np.sum(diffs < 10.0) / len(diffs) * 100,
+            'less_20deg': np.sum(diffs < 20.0) / len(diffs) * 100,
+            'greater_20deg': np.sum(diffs >= 20.0) / len(diffs) * 100,
+        }
+
+
+# 全局统计实例
+CONSTELL_CHECK_STATS = ConstellationCheckStats()
