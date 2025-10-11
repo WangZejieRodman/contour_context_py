@@ -619,6 +619,8 @@ class CandidateManager:
         assert sim_lb.sim_pair.strict_smaller(sim_ub.sim_pair)
         assert sim_lb.sim_post.strict_smaller(sim_ub.sim_post)
 
+        self.disable_check3 = False  # 设置为True时禁用Check3
+
     def check_cand_with_hint(self, cm_cand: ContourManager, anchor_pair: ConstellationPair,
                              cont_sim) -> CandidateScoreEnsemble:
         """
@@ -665,16 +667,29 @@ class CandidateManager:
         self.cand_aft_check2 += 1
 
         # 检查3/4: 个体相似性检查
-        tmp_pairs2 = []
-        tmp_area_perc = []
-        ret_pairwise_sim, tmp_pairs2, tmp_area_perc = self._check_constell_corresp_sim(
-            cm_cand, self.cm_tgt, tmp_pairs1, self.sim_var.sim_pair, cont_sim)
+        if self.disable_check3:
+            # 实验：禁用Check3，直接使用Check2的结果
+            tmp_pairs2 = tmp_pairs1.copy()  # 使用Check2的配对
+            tmp_area_perc = [0.5] * len(tmp_pairs2)  # 给虚拟的面积百分比
 
-        ret_score.sim_pair = ret_pairwise_sim
-        if ret_pairwise_sim.overall() < self.sim_var.sim_pair.overall():
-            return ret_score
+            ret_pairwise_sim = ScorePairwiseSim()
+            ret_pairwise_sim.i_indiv_sim = len(tmp_pairs2)
+            ret_pairwise_sim.i_orie_sim = len(tmp_pairs2)
+            ret_score.sim_pair = ret_pairwise_sim
 
-        self.cand_aft_check3 += 1
+            self.cand_aft_check3 += 1  # 统计上认为"通过"
+        else:
+            # 正常执行Check3
+            tmp_pairs2 = []
+            tmp_area_perc = []
+            ret_pairwise_sim, tmp_pairs2, tmp_area_perc = self._check_constell_corresp_sim(
+                cm_cand, self.cm_tgt, tmp_pairs1, self.sim_var.sim_pair, cont_sim)
+
+            ret_score.sim_pair = ret_pairwise_sim
+            if ret_pairwise_sim.overall() < self.sim_var.sim_pair.overall():
+                return ret_score
+
+            self.cand_aft_check3 += 1
 
         # 获取变换矩阵
         T_pass = self._get_tf_from_constell(cm_cand, self.cm_tgt, tmp_pairs2)
