@@ -245,9 +245,20 @@ class ChileanContourEvaluator:
 
         # 轮廓相似性配置 - 放宽阈值以适应地下环境
         sim_cfg = ContourSimThresConfig()
+
+        # 基线（当前）
         sim_cfg.ta_cell_cnt = 15.0  # 放宽绝对面积差异
         sim_cfg.tp_cell_cnt = 0.6  # 放宽相对面积差异
         sim_cfg.tp_eigval = 0.6  # 放宽特征值差异
+        # 超宽松（实验组）
+        # sim_cfg.ta_cell_cnt = 100.0  # 基线的6.7倍
+        # sim_cfg.tp_cell_cnt = 0.9  # 基线的1.5倍
+        # sim_cfg.tp_eigval = 0.9  # 基线的1.5倍
+        # 超严格（实验组）
+        # sim_cfg.ta_cell_cnt = 5.0  # 基线的1/3
+        # sim_cfg.tp_cell_cnt = 0.3  # 基线的1/2
+        # sim_cfg.tp_eigval = 0.3  # 基线的1/2
+
         sim_cfg.ta_h_bar = 1.2  # 放宽高度差异
         sim_cfg.ta_rcom = 1.5  # 放宽质心半径差异
         sim_cfg.tp_rcom = 0.7  # 放宽质心半径相对差异
@@ -259,14 +270,54 @@ class ChileanContourEvaluator:
         """创建检测阈值"""
         # 下界阈值（较宽松以适应时间跨度大的数据）
         thres_lb = CandidateScoreEnsemble()
-        thres_lb.sim_constell.i_ovlp_sum = 1  # 进一步降低
-        thres_lb.sim_constell.i_ovlp_max_one = 1
-        thres_lb.sim_constell.i_in_ang_rng = 1  # 最低要求
+
+        DISABLE_CHECK2 = False  # DISABLE_CHECK2 = True 表示禁用Check2（位重叠和角度重叠）星座检查
+
+        if DISABLE_CHECK2:
+            thres_lb.sim_constell.i_ovlp_sum = 0  # 不要求任何位重叠
+            thres_lb.sim_constell.i_ovlp_max_one = 0
+            thres_lb.sim_constell.i_in_ang_rng = 0  # 不要求角度一致
+        else:
+            # 基线配置
+            thres_lb.sim_constell.i_ovlp_sum = 1
+            thres_lb.sim_constell.i_ovlp_max_one = 1
+            thres_lb.sim_constell.i_in_ang_rng = 1
+
         thres_lb.sim_pair.i_indiv_sim = 1
         thres_lb.sim_pair.i_orie_sim = 1  # 最低要求
-        thres_lb.sim_post.correlation = 0.001  # 几乎不要求
+        #########后处理三道门槛独立贡献
+        # ========== 配置1：全禁用 ==========
+        thres_lb.sim_post.correlation = 0.0001
         thres_lb.sim_post.area_perc = 0.0001
-        thres_lb.sim_post.neg_est_dist = -20.0  # 很宽松的距离要求
+        thres_lb.sim_post.neg_est_dist = -100.0
+        # # ========== 配置2：只面积 ==========
+        # thres_lb.sim_post.correlation = 0.0001  # 禁用GMM
+        # thres_lb.sim_post.area_perc = 0.01  # 启用面积 ✓
+        # thres_lb.sim_post.neg_est_dist = -100.0  # 禁用距离
+        # # ========== 配置3：只距离 ==========
+        # thres_lb.sim_post.correlation = 0.0001  # 禁用GMM
+        # thres_lb.sim_post.area_perc = 0.0001  # 禁用面积
+        # thres_lb.sim_post.neg_est_dist = -10.0  # 启用距离 ✓
+        # # ========== 配置4：只GMM ==========
+        # thres_lb.sim_post.correlation = 0.2  # 启用GMM ✓
+        # thres_lb.sim_post.area_perc = 0.0001  # 禁用面积
+        # thres_lb.sim_post.neg_est_dist = -100.0  # 禁用距离
+        # # ========== 配置5：面积+距离 ==========
+        # thres_lb.sim_post.correlation = 0.0001  # 禁用GMM
+        # thres_lb.sim_post.area_perc = 0.01  # 启用面积 ✓
+        # thres_lb.sim_post.neg_est_dist = -10.0  # 启用距离 ✓
+        # # ========== 配置6：面积+GMM ==========
+        # thres_lb.sim_post.correlation = 0.2  # 启用GMM ✓
+        # thres_lb.sim_post.area_perc = 0.01  # 启用面积 ✓
+        # thres_lb.sim_post.neg_est_dist = -100.0  # 禁用距离
+        # # ========== 配置7：距离+GMM ==========
+        # thres_lb.sim_post.correlation = 0.2  # 启用GMM ✓
+        # thres_lb.sim_post.area_perc = 0.0001  # 禁用面积
+        # thres_lb.sim_post.neg_est_dist = -10.0  # 启用距离 ✓
+        # # ========== 配置8：全启用 ==========
+        # thres_lb.sim_post.correlation = 0.2  # 启用GMM ✓
+        # thres_lb.sim_post.area_perc = 0.01  # 启用面积 ✓
+        # thres_lb.sim_post.neg_est_dist = -10.0  # 启用距离 ✓
 
         # 上界阈值
         thres_ub = CandidateScoreEnsemble()
@@ -1068,7 +1119,13 @@ class ChileanContourEvaluator:
         # report_lines.append(f"\n实验{experiment_name}: 垂直结构复杂度消融实验")  # C4
         # report_lines.append(f"\n实验{experiment_name}: BCI邻域搜索层级范围消融实验")  # D1
         # report_lines.append(f"\n实验{experiment_name}: BCI分bin数量消融实验")  # D4
-        report_lines.append(f"\n实验{experiment_name}: BCI角度一致性检查的角度阈值消融实验")  # D5
+        # report_lines.append(f"\n实验{experiment_name}: BCI角度一致性检查的角度阈值消融实验")  # D5
+        # report_lines.append(f"\n实验{experiment_name}: GMM相关性阈值消融实验")  # F1
+        # report_lines.append(f"\n实验{experiment_name}: 轮廓相似性（Check1）消融实验") #E0
+        # report_lines.append(f"\n实验{experiment_name}: Check2星座检查消融实验") #E4
+        # report_lines.append(f"\n实验{experiment_name}: Check3成对相似性检查消融实验")  # E2
+        report_lines.append(f"\n实验{experiment_name}: 后处理三道门槛（面积、距离、GMM）独立贡献消融实验")  # H0
+
 
         report_lines.append("=" * 40)
         report_lines.append(f"参数设置: {param_value}")
@@ -2047,7 +2104,7 @@ def main():
     end_time = time.time()
 
     # 输出消融实验汇总
-    evaluator.output_ablation_summary("D5", param_value=np.pi / 16, top1_recall=top1_recall)
+    evaluator.output_ablation_summary("H0", param_value="后处理三道门槛（面积、距离、GMM）独立贡献：全禁用", top1_recall=top1_recall)
 
     print(f"\n评估完成!")
     print(f"总耗时: {end_time - start_time:.2f} 秒")
